@@ -1,0 +1,4 @@
+server:
+  base: http://10.13.3.68:3080/v2
+  user: gns3
+  password: change-me

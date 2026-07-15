@@ -1,0 +1,9 @@
+venv/
+__pycache__/
+*.pyc
+gns3lab_config.yml
+*.egg-info/
+build/
+dist/
+*.exe
+.claude/

@@ -1,0 +1,288 @@
+# 金融グループ WAN接続トポロジー（東京DC / 大阪DR / 本店）
+#
+# 構成:
+#   東京DC(本番)・大阪DC(DR)・本店 の3拠点を WAN_Core(共有セグメントで
+#   WAN/MPLS網を簡易的に表現)経由で接続。各DCは 勘定系(Core Banking) /
+#   市場系(Trading) セグメントを持ち、東京DCのみインターネットバンキング
+#   向けDMZを ASAv ファイアウォール配下に持つ。
+#
+#   DC-TYO-RTR / DC-OSA-RTR / HQ-RTR : Cisco IOSv 15.9(3)M12 (本物のL3ルーター)
+#   FW-TYO                           : Cisco ASAv 9.24.1 CML (DMZ境界ファイアウォール)
+#   SW-*/WAN_Core                    : Ethernet switch (config投入なし)
+#   CoreBank-*/Trade-*/DMZ-TYO/HQ-PC*: VPCS (各セグメントの代表端末)
+#   Internet                         : NAT (DMZからの外部接続、DHCPでアドレス払い出し)
+#
+# --- IPアドレス計画 ---
+#   WAN共有セグメント        : 172.16.0.0/24
+#     DC-TYO-RTR Gi0/0=.1, DC-OSA-RTR Gi0/0=.2, HQ-RTR Gi0/0=.3
+#   東京DC 勘定系             : 10.1.1.0/24  (RTR Gi0/1=.1, CoreBank-TYO=.10)
+#   東京DC 市場系             : 10.1.2.0/24  (RTR Gi0/2=.1, Trade-TYO=.10)
+#   東京DC RTR-FW間(inside)   : 10.1.4.0/30  (RTR Gi0/3=.1, FW-TYO inside=.2)
+#   東京DC DMZ               : 10.1.3.0/24  (FW-TYO dmz=.1, DMZ-TYO=.10)
+#   東京DC outside           : DHCP (NATノードから動的払い出し)
+#   大阪DC(DR) 勘定系         : 10.2.1.0/24  (RTR Gi0/1=.1, CoreBank-OSA=.10)
+#   大阪DC(DR) 市場系         : 10.2.2.0/24  (RTR Gi0/2=.1, Trade-OSA=.10)
+#   本店 LAN                 : 10.3.1.0/24  (RTR Gi0/1=.1, HQ-PC1=.10, HQ-PC2=.11)
+#
+#   ルーティング: OSPF area 0 (WAN + 各拠点セグメント + RTR-FW間 transitを1エリアで広告)
+#   ※ DMZセグメント(10.1.3.0/24)はOSPFに広告せず、DC-TYO-RTRのstatic routeのみ
+#     (大阪DC/本店からDMZへは到達不可にし、東京DC内からの管理アクセスのみ許可)
+#
+#   セキュリティ(ASAv security-level):
+#     inside(100) > dmz(50) > outside(0)
+#     - inside -> dmz  : デフォルト許可 (東京DC核心系からDMZサーバーへの管理アクセス)
+#     - dmz -> inside  : デフォルト拒否 (DMZが侵害されても核心系へ横展開できない)
+#     - dmz -> outside : デフォルト許可 (DMZサーバーのパッチ適用等)
+#     - outside -> dmz : 明示ACLで443/tcpのみ許可 (インターネットバンキング公開)
+#
+# --- 検証手順の例 (deploy後) ---
+#   1. 各RTRで `show ip ospf neighbor` → WAN経由で3拠点が隣接していること
+#   2. CoreBank-TYO -> CoreBank-OSA へ ping → DC間のDR疎通確認
+#   3. HQ-PC1 -> Trade-TYO へ ping → 本店から市場系への疎通確認
+#   4. CoreBank-TYO -> DMZ-TYO(10.1.3.10) へ ping → 管理アクセスとして成功すること
+#   5. DMZ-TYO -> CoreBank-TYO(10.1.1.10) へ ping → ASAvのdmz->inside拒否で失敗すること
+#   6. DMZ-TYO -> Internet 8.8.8.8等へ ping → 外部接続確認 (dmz->outside許可)
+#
+# --- 注意 ---
+#   Cisco IOSv / ASAv はQEMU系ノードのため、`gns3lab deploy` のCLI自動投入
+#   (dynamips/IOU/VPCSのみ対応)は非対応です。IOSv/ASAvへの設定は
+#   GNS3のコンソールから手動で投入してください(このファイルの config: の内容をそのまま貼り付け)。
+#
+#   FW-TYO(ASAv)固有の注意点:
+#   - デフォルトはVNCコンソールのため、初回起動(二段階起動)完了後にGNS3上で
+#     コンソールタイプをTelnetに切り替えてから接続してください
+#     (テンプレートのusage欄にも記載: "Switch to the Telnet console type after the first boot")
+#   - 初回 `enable` 時にenableパスワードの設定を要求されます(空欄・3文字以上の
+#     連続/繰り返し文字は拒否されるため、例: Fw9mQ2k7Tz のような文字列を設定してください)。
+#     設定後は `configure terminal` からこのconfig:の内容を貼り付けてください。
+
+name: financial_wan_lab
+
+nodes:
+  # --- WAN ---
+  WAN_Core:
+    template: Ethernet switch
+    x: 0
+    y: -50
+
+  # --- 本店 ---
+  HQ-RTR:
+    template: "Cisco IOSv 15.9(3)M12"
+    x: 0
+    y: -300
+    config: |
+      hostname HQ-RTR
+      interface GigabitEthernet0/0
+       ip address 172.16.0.3 255.255.255.0
+       no shutdown
+      interface GigabitEthernet0/1
+       ip address 10.3.1.1 255.255.255.0
+       no shutdown
+      router ospf 1
+       network 172.16.0.0 0.0.0.255 area 0
+       network 10.3.1.0 0.0.0.255 area 0
+
+  SW-HQ:
+    template: Ethernet switch
+    x: 0
+    y: -450
+
+  HQ-PC1:
+    template: VPCS
+    x: -100
+    y: -600
+    config: |
+      ip 10.3.1.10 255.255.255.0 10.3.1.1
+      save
+
+  HQ-PC2:
+    template: VPCS
+    x: 100
+    y: -600
+    config: |
+      ip 10.3.1.11 255.255.255.0 10.3.1.1
+      save
+
+  # --- 東京DC (本番) ---
+  DC-TYO-RTR:
+    template: "Cisco IOSv 15.9(3)M12"
+    x: -350
+    y: 150
+    config: |
+      hostname DC-TYO-RTR
+      interface GigabitEthernet0/0
+       ip address 172.16.0.1 255.255.255.0
+       no shutdown
+      interface GigabitEthernet0/1
+       ip address 10.1.1.1 255.255.255.0
+       no shutdown
+      interface GigabitEthernet0/2
+       ip address 10.1.2.1 255.255.255.0
+       no shutdown
+      interface GigabitEthernet0/3
+       ip address 10.1.4.1 255.255.255.252
+       no shutdown
+      ip route 10.1.3.0 255.255.255.0 10.1.4.2
+      router ospf 1
+       network 172.16.0.0 0.0.0.255 area 0
+       network 10.1.1.0 0.0.0.255 area 0
+       network 10.1.2.0 0.0.0.255 area 0
+       network 10.1.4.0 0.0.0.3 area 0
+
+  SW-TYO-CORE:
+    template: Ethernet switch
+    x: -500
+    y: 300
+
+  SW-TYO-TRADE:
+    template: Ethernet switch
+    x: -350
+    y: 300
+
+  CoreBank-TYO:
+    template: VPCS
+    x: -500
+    y: 450
+    config: |
+      ip 10.1.1.10 255.255.255.0 10.1.1.1
+      save
+
+  Trade-TYO:
+    template: VPCS
+    x: -350
+    y: 450
+    config: |
+      ip 10.1.2.10 255.255.255.0 10.1.2.1
+      save
+
+  # 東京DC DMZ (ASAvファイアウォール配下)
+  FW-TYO:
+    template: "Cisco ASAv 9.24.1 CML"
+    x: -150
+    y: 300
+    config: |
+      hostname FW-TYO
+      interface GigabitEthernet0/0
+       nameif inside
+       security-level 100
+       ip address 10.1.4.2 255.255.255.252
+       no shutdown
+      interface GigabitEthernet0/1
+       nameif dmz
+       security-level 50
+       ip address 10.1.3.1 255.255.255.0
+       no shutdown
+      interface GigabitEthernet0/2
+       nameif outside
+       security-level 0
+       ip address dhcp setroute
+       no shutdown
+      route inside 10.1.0.0 255.255.0.0 10.1.4.1 1
+      object network DMZ-TYO-HTTPS
+       host 10.1.3.10
+      object service HTTPS
+       service tcp destination eq 443
+      nat (dmz,outside) source static DMZ-TYO-HTTPS interface service HTTPS HTTPS
+      object network DMZ-NET
+       subnet 10.1.3.0 255.255.255.0
+      nat (dmz,outside) dynamic interface
+      access-list OUTSIDE_IN extended permit tcp any object DMZ-TYO-HTTPS eq 443
+      access-group OUTSIDE_IN in interface outside
+      class-map inspection_default
+       match default-inspection-traffic
+      policy-map global_policy
+       class inspection_default
+        inspect icmp
+      service-policy global_policy global
+
+  SW-TYO-DMZ:
+    template: Ethernet switch
+    x: -150
+    y: 450
+
+  DMZ-TYO:
+    template: VPCS
+    x: -150
+    y: 600
+    config: |
+      ip 10.1.3.10 255.255.255.0 10.1.3.1
+      save
+
+  Internet:
+    template: NAT
+    x: 0
+    y: 300
+
+  # --- 大阪DC (DR) ---
+  DC-OSA-RTR:
+    template: "Cisco IOSv 15.9(3)M12"
+    x: 350
+    y: 150
+    config: |
+      hostname DC-OSA-RTR
+      interface GigabitEthernet0/0
+       ip address 172.16.0.2 255.255.255.0
+       no shutdown
+      interface GigabitEthernet0/1
+       ip address 10.2.1.1 255.255.255.0
+       no shutdown
+      interface GigabitEthernet0/2
+       ip address 10.2.2.1 255.255.255.0
+       no shutdown
+      router ospf 1
+       network 172.16.0.0 0.0.0.255 area 0
+       network 10.2.1.0 0.0.0.255 area 0
+       network 10.2.2.0 0.0.0.255 area 0
+
+  SW-OSA-CORE:
+    template: Ethernet switch
+    x: 250
+    y: 300
+
+  SW-OSA-TRADE:
+    template: Ethernet switch
+    x: 450
+    y: 300
+
+  CoreBank-OSA:
+    template: VPCS
+    x: 250
+    y: 450
+    config: |
+      ip 10.2.1.10 255.255.255.0 10.2.1.1
+      save
+
+  Trade-OSA:
+    template: VPCS
+    x: 450
+    y: 450
+    config: |
+      ip 10.2.2.10 255.255.255.0 10.2.2.1
+      save
+
+links:
+  # WAN (IOSv: adapter番号=Gi0/番号, port番号は常に0)
+  - [DC-TYO-RTR:0/0, WAN_Core:0/0]
+  - [DC-OSA-RTR:0/0, WAN_Core:0/1]
+  - [HQ-RTR:0/0, WAN_Core:0/2]
+
+  # 本店
+  - [HQ-RTR:1/0, SW-HQ:0/0]
+  - [SW-HQ:0/1, HQ-PC1:0/0]
+  - [SW-HQ:0/2, HQ-PC2:0/0]
+
+  # 東京DC (核心系・市場系は直接ルーター、DMZはASAv経由)
+  - [DC-TYO-RTR:1/0, SW-TYO-CORE:0/0]
+  - [DC-TYO-RTR:2/0, SW-TYO-TRADE:0/0]
+  - [SW-TYO-CORE:0/1, CoreBank-TYO:0/0]
+  - [SW-TYO-TRADE:0/1, Trade-TYO:0/0]
+  - [DC-TYO-RTR:3/0, FW-TYO:1/0]        # RTR Gi0/3 -- FW inside(Gi0/0)
+  - [FW-TYO:2/0, SW-TYO-DMZ:0/0]        # FW dmz(Gi0/1) -- DMZスイッチ
+  - [SW-TYO-DMZ:0/1, DMZ-TYO:0/0]
+  - [FW-TYO:3/0, Internet:0/0]          # FW outside(Gi0/2) -- Internet(NAT, DHCP)
+
+  # 大阪DC
+  - [DC-OSA-RTR:1/0, SW-OSA-CORE:0/0]
+  - [DC-OSA-RTR:2/0, SW-OSA-TRADE:0/0]
+  - [SW-OSA-CORE:0/1, CoreBank-OSA:0/0]
+  - [SW-OSA-TRADE:0/1, Trade-OSA:0/0]

@@ -1,0 +1,22 @@
+[project]
+name = "gns3lab"
+version = "0.1.0"
+description = "containerlab風のGNS3トポロジ管理CLI"
+requires-python = ">=3.9"
+dependencies = [
+    "requests",
+    "pyyaml",
+]
+
+[project.scripts]
+gns3lab = "gns3lab.cli:main"
+
+[project.gui-scripts]
+gns3lab-gui = "gns3lab.gui:main"
+
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["src"]

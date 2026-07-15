@@ -1,0 +1,184 @@
+# MPLS L3VPN 検証用トポロジー
+#
+# 構成: PC1 - CE1 - PE1 - P1 - PE2 - CE2 - PC2
+#   CE1/CE2 : 顧客側ルータ (MPLS非対応、通常のIPルーティングのみ)
+#   PE1/PE2 : プロバイダエッジ (VRF + MPLS + LDP + MP-BGP VPNv4 を設定)
+#   P1      : プロバイダコア (OSPF + LDP のみ、VRFは持たない)
+#   PC1/PC2 : 疎通確認用エンドホスト (VPCS)
+#
+# 全機種 c3725 はオンボード2ポート (FastEthernet0/0, 0/1) のみを使用。
+# 各ノードの config: ブロックは `gns3lab deploy` 実行時に自動でコンソールへ投入される
+# (--no-start / --no-config を付けるとスキップされる)。
+#
+# --- IPアドレス計画 ---
+#   PC1-CE1  : 192.168.1.0/24  (CE1=.1, PC1=.10)
+#   CE1-PE1  : 10.1.1.0/30     (CE1=.1, PE1=.2)
+#   PE1-P1   : 10.1.2.0/30     (PE1=.1, P1=.2)
+#   P1-PE2   : 10.1.3.0/30     (P1=.1, PE2=.2)
+#   PE2-CE2  : 10.1.4.0/30     (PE2=.1, CE2=.2)
+#   CE2-PC2  : 192.168.2.0/24  (CE2=.1, PC2=.10)
+#   Loopback0: PE1=1.1.1.1/32, P1=2.2.2.2/32, PE2=3.3.3.3/32 (LDP router-id / BGP peering)
+#   BGP AS   : 65000 (PE1-PE2間 iBGP, VRF CUST_A: rd/rt = 65000:1)
+#
+# --- 検証手順の例 (デプロイ後) ---
+#   1. show mpls ldp neighbor  (PE1/P1/PE2 で LDP隣接が張れているか)
+#   2. show ip route vrf CUST_A  (PE1/PE2 でCUST_A内のCE側経路が見えるか)
+#   3. show bgp vpnv4 unicast vrf CUST_A  (PE1-PE2間でVPNv4経路が交換されているか)
+#   4. PC1 -> PC2 で ping 192.168.2.10 が通ることを確認
+#   5. PC1 -> PC2 で traceroute し、PE1/P1/PE2 区間でMPLSラベルが付与されていることを確認
+#      (PE1/P1 で show mpls forwarding-table も合わせて確認)
+
+name: mpls_lab3
+
+nodes:
+  PC1:
+    template: VPCS
+    x: -300
+    y: 150
+    config: |
+      ip 192.168.1.10 255.255.255.0 192.168.1.1
+      save
+
+  CE1:
+    template: c3725
+    x: -300
+    y: 0
+    config: |
+      hostname CE1
+      interface FastEthernet0/0
+       ip address 192.168.1.1 255.255.255.0
+       no shutdown
+      interface FastEthernet0/1
+       ip address 10.1.1.1 255.255.255.252
+       no shutdown
+      ip route 0.0.0.0 0.0.0.0 10.1.1.2
+
+  PE1:
+    template: c3725
+    x: -150
+    y: 0
+    config: |
+      hostname PE1
+      ip cef
+      ip vrf CUST_A
+       rd 65000:1
+       route-target export 65000:1
+       route-target import 65000:1
+      interface Loopback0
+       ip address 1.1.1.1 255.255.255.255
+      interface FastEthernet0/0
+       ip vrf forwarding CUST_A
+       ip address 10.1.1.2 255.255.255.252
+       no shutdown
+      interface FastEthernet0/1
+       ip address 10.1.2.1 255.255.255.252
+       mpls ip
+       no shutdown
+      router ospf 1
+       network 1.1.1.1 0.0.0.0 area 0
+       network 10.1.2.0 0.0.0.3 area 0
+      mpls label protocol ldp
+      mpls ldp router-id Loopback0 force
+      router bgp 65000
+       no bgp default ipv4-unicast
+       neighbor 3.3.3.3 remote-as 65000
+       neighbor 3.3.3.3 update-source Loopback0
+       address-family vpnv4
+        neighbor 3.3.3.3 activate
+        neighbor 3.3.3.3 send-community extended
+       exit-address-family
+       address-family ipv4 vrf CUST_A
+        redistribute connected
+       exit-address-family
+
+  P1:
+    template: c3725
+    x: 0
+    y: 0
+    config: |
+      hostname P1
+      ip cef
+      interface Loopback0
+       ip address 2.2.2.2 255.255.255.255
+      interface FastEthernet0/0
+       ip address 10.1.2.2 255.255.255.252
+       mpls ip
+       no shutdown
+      interface FastEthernet0/1
+       ip address 10.1.3.1 255.255.255.252
+       mpls ip
+       no shutdown
+      router ospf 1
+       network 2.2.2.2 0.0.0.0 area 0
+       network 10.1.2.0 0.0.0.3 area 0
+       network 10.1.3.0 0.0.0.3 area 0
+      mpls label protocol ldp
+      mpls ldp router-id Loopback0 force
+
+  PE2:
+    template: c3725
+    x: 150
+    y: 0
+    config: |
+      hostname PE2
+      ip cef
+      ip vrf CUST_A
+       rd 65000:1
+       route-target export 65000:1
+       route-target import 65000:1
+      interface Loopback0
+       ip address 3.3.3.3 255.255.255.255
+      interface FastEthernet0/0
+       ip address 10.1.3.2 255.255.255.252
+       mpls ip
+       no shutdown
+      interface FastEthernet0/1
+       ip vrf forwarding CUST_A
+       ip address 10.1.4.1 255.255.255.252
+       no shutdown
+      router ospf 1
+       network 3.3.3.3 0.0.0.0 area 0
+       network 10.1.3.0 0.0.0.3 area 0
+      mpls label protocol ldp
+      mpls ldp router-id Loopback0 force
+      router bgp 65000
+       no bgp default ipv4-unicast
+       neighbor 1.1.1.1 remote-as 65000
+       neighbor 1.1.1.1 update-source Loopback0
+       address-family vpnv4
+        neighbor 1.1.1.1 activate
+        neighbor 1.1.1.1 send-community extended
+       exit-address-family
+       address-family ipv4 vrf CUST_A
+        redistribute connected
+       exit-address-family
+
+  CE2:
+    template: c3725
+    x: 300
+    y: 0
+    config: |
+      hostname CE2
+      interface FastEthernet0/0
+       ip address 10.1.4.2 255.255.255.252
+       no shutdown
+      interface FastEthernet0/1
+       ip address 192.168.2.1 255.255.255.0
+       no shutdown
+      ip route 0.0.0.0 0.0.0.0 10.1.4.1
+
+  PC2:
+    template: VPCS
+    x: 300
+    y: 150
+    config: |
+      ip 192.168.2.10 255.255.255.0 192.168.2.1
+      save
+
+links:
+  - [PC1:0/0, CE1:0/0]
+  - [CE1:0/1, PE1:0/0]
+  - [PE1:0/1, P1:0/0]
+  - [P1:0/1, PE2:0/0]
+  - [PE2:0/1, CE2:0/0]
+  - [CE2:0/1, PC2:0/0]

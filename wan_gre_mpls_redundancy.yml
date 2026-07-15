@@ -1,0 +1,207 @@
+# WANルーター間 冗長化トポロジー (MPLSプライマリ + GRE over IPsec VPNバックアップ)
+#
+# 構成:
+#   東京側(WAN-RT1) と 大阪側(WAN-RT2) の2拠点を、2つの独立した経路で接続する。
+#     経路1(プライマリ) : WAN-RT1 -- P1(MPLSコア, LDP) -- WAN-RT2
+#     経路2(バックアップ): WAN-RT1 == GRE over IPsec VPN == WAN-RT2 (INET_Core経由)
+#   OSPFを両経路で有効化し、GREトンネル側のコストを意図的に高くすることで
+#   平常時はMPLS経路を使用し、MPLS経路障害時のみVPN経路へ自動フェイルオーバーする。
+#
+#   WAN-RT1 / WAN-RT2 / P1 : Cisco IOSv 15.9(3)M12
+#   SW-A / SW-B / INET_Core: Ethernet switch (config投入なし)
+#   PC-A / PC-B            : VPCS
+#
+# --- IPアドレス計画 ---
+#   Loopback0(router-id) : WAN-RT1=1.1.1.1, P1=2.2.2.2, WAN-RT2=3.3.3.3
+#   拠点A LAN            : 10.10.1.0/24 (WAN-RT1 Gi0/0=.1, PC-A=.10)
+#   拠点B LAN            : 10.10.2.0/24 (WAN-RT2 Gi0/0=.1, PC-B=.10)
+#   MPLS経路 RT1-P1      : 10.99.1.0/30 (RT1 Gi0/1=.1, P1 Gi0/0=.2)
+#   MPLS経路 P1-RT2      : 10.99.2.0/30 (P1 Gi0/1=.1, RT2 Gi0/1=.2)
+#   INET_Core(VPN対向用) : 203.0.113.0/24 (RT1 Gi0/2=.1, RT2 Gi0/2=.2)
+#   GREトンネル(Tunnel0) : 172.31.0.0/30 (RT1=.1, RT2=.2)
+#
+#   ルーティング: OSPF area 0 (LAN + MPLS区間 + Tunnel0すべて)
+#     - MPLS区間(RT1-P1-RT2)は通常コストのままプライマリ経路
+#     - Tunnel0は `ip ospf cost 1000` でバックアップ経路化
+#   MPLS: RT1 Gi0/1 - P1 両インターフェース - RT2 Gi0/1 でLDP+mpls ip有効化
+#   VPN : Tunnel0はGRE、`tunnel protection ipsec profile` でIPsec(AES256/SHA256/PSK)保護
+#
+# --- 検証手順の例 (deploy後) ---
+#   1. WAN-RT1で `show ip ospf neighbor` → P1(Gi0/1)とWAN-RT2(Tunnel0)の両方がFULLであること
+#   2. WAN-RT1で `show mpls ldp neighbor` → P1とLDP隣接が確立していること
+#   3. WAN-RT1で `show crypto isakmp sa` / `show crypto ipsec sa` → Tunnel0上でIPsec SAが確立していること
+#   4. WAN-RT1で `show ip route 10.10.2.0` → 平常時はP1(Gi0/1)経由(MPLS)が選ばれていること
+#   5. PC-A -> PC-B へ ping → 成功すること(MPLS経由)
+#   6. WAN-RT1で `interface GigabitEthernet0/1` → `shutdown` (MPLS経路を意図的に落とす)
+#   7. 再度 `show ip route 10.10.2.0` → 経路がTunnel0(GRE/VPN)経由に切り替わっていること
+#   8. PC-A -> PC-B へ ping → 障害時も成功し続けること(VPN経由にフェイルオーバー)
+#   9. `no shutdown` で復旧 → 経路がP1(MPLS)経由に戻ること
+#
+# --- 注意 ---
+#   Cisco IOSv はQEMU系ノードのため `gns3lab deploy` のCLI自動投入は非対応です
+#   (dynamips/IOU/VPCSのみ対応)。WAN-RT1/WAN-RT2/P1への設定は
+#   GNS3のコンソールから手動で投入してください(このファイルの config: をそのまま貼り付け)。
+
+name: wan_gre_mpls_redundancy
+
+nodes:
+  # --- 拠点A (東京側) ---
+  WAN-RT1:
+    template: "Cisco IOSv 15.9(3)M12"
+    x: -300
+    y: 0
+    config: |
+      hostname WAN-RT1
+      interface Loopback0
+       ip address 1.1.1.1 255.255.255.255
+      interface GigabitEthernet0/0
+       ip address 10.10.1.1 255.255.255.0
+       no shutdown
+      interface GigabitEthernet0/1
+       ip address 10.99.1.1 255.255.255.252
+       mpls ip
+       no shutdown
+      interface GigabitEthernet0/2
+       ip address 203.0.113.1 255.255.255.0
+       no shutdown
+      crypto isakmp policy 10
+       encryption aes 256
+       hash sha256
+       authentication pre-share
+       group 14
+      crypto isakmp key VpnKey2026 address 203.0.113.2
+      crypto ipsec transform-set TS esp-aes 256 esp-sha256-hmac
+       mode transport
+      crypto ipsec profile GRE-PROTECT
+       set transform-set TS
+      interface Tunnel0
+       ip address 172.31.0.1 255.255.255.252
+       tunnel source GigabitEthernet0/2
+       tunnel destination 203.0.113.2
+       tunnel protection ipsec profile GRE-PROTECT
+       ip ospf cost 1000
+       no shutdown
+      mpls label protocol ldp
+      mpls ldp router-id Loopback0 force
+      router ospf 1
+       network 1.1.1.1 0.0.0.0 area 0
+       network 10.10.1.0 0.0.0.255 area 0
+       network 10.99.1.0 0.0.0.3 area 0
+       network 172.31.0.0 0.0.0.3 area 0
+
+  SW-A:
+    template: Ethernet switch
+    x: -450
+    y: 0
+
+  PC-A:
+    template: VPCS
+    x: -600
+    y: 0
+    config: |
+      ip 10.10.1.10 255.255.255.0 10.10.1.1
+      save
+
+  # --- MPLSコア ---
+  P1:
+    template: "Cisco IOSv 15.9(3)M12"
+    x: 0
+    y: -150
+    config: |
+      hostname P1
+      interface Loopback0
+       ip address 2.2.2.2 255.255.255.255
+      interface GigabitEthernet0/0
+       ip address 10.99.1.2 255.255.255.252
+       mpls ip
+       no shutdown
+      interface GigabitEthernet0/1
+       ip address 10.99.2.1 255.255.255.252
+       mpls ip
+       no shutdown
+      mpls label protocol ldp
+      mpls ldp router-id Loopback0 force
+      router ospf 1
+       network 2.2.2.2 0.0.0.0 area 0
+       network 10.99.1.0 0.0.0.3 area 0
+       network 10.99.2.0 0.0.0.3 area 0
+
+  # --- インターネット(VPN対向用の共有セグメント) ---
+  INET_Core:
+    template: Ethernet switch
+    x: 0
+    y: 150
+
+  # --- 拠点B (大阪側) ---
+  WAN-RT2:
+    template: "Cisco IOSv 15.9(3)M12"
+    x: 300
+    y: 0
+    config: |
+      hostname WAN-RT2
+      interface Loopback0
+       ip address 3.3.3.3 255.255.255.255
+      interface GigabitEthernet0/0
+       ip address 10.10.2.1 255.255.255.0
+       no shutdown
+      interface GigabitEthernet0/1
+       ip address 10.99.2.2 255.255.255.252
+       mpls ip
+       no shutdown
+      interface GigabitEthernet0/2
+       ip address 203.0.113.2 255.255.255.0
+       no shutdown
+      crypto isakmp policy 10
+       encryption aes 256
+       hash sha256
+       authentication pre-share
+       group 14
+      crypto isakmp key VpnKey2026 address 203.0.113.1
+      crypto ipsec transform-set TS esp-aes 256 esp-sha256-hmac
+       mode transport
+      crypto ipsec profile GRE-PROTECT
+       set transform-set TS
+      interface Tunnel0
+       ip address 172.31.0.2 255.255.255.252
+       tunnel source GigabitEthernet0/2
+       tunnel destination 203.0.113.1
+       tunnel protection ipsec profile GRE-PROTECT
+       ip ospf cost 1000
+       no shutdown
+      mpls label protocol ldp
+      mpls ldp router-id Loopback0 force
+      router ospf 1
+       network 3.3.3.3 0.0.0.0 area 0
+       network 10.10.2.0 0.0.0.255 area 0
+       network 10.99.2.0 0.0.0.3 area 0
+       network 172.31.0.0 0.0.0.3 area 0
+
+  SW-B:
+    template: Ethernet switch
+    x: 450
+    y: 0
+
+  PC-B:
+    template: VPCS
+    x: 600
+    y: 0
+    config: |
+      ip 10.10.2.10 255.255.255.0 10.10.2.1
+      save
+
+links:
+  # 拠点A
+  - [WAN-RT1:0/0, SW-A:0/0]
+  - [SW-A:0/1, PC-A:0/0]
+
+  # MPLSプライマリ経路
+  - [WAN-RT1:1/0, P1:0/0]
+  - [P1:1/0, WAN-RT2:1/0]
+
+  # インターネット/VPNバックアップ経路
+  - [WAN-RT1:2/0, INET_Core:0/0]
+  - [WAN-RT2:2/0, INET_Core:0/1]
+
+  # 拠点B
+  - [WAN-RT2:0/0, SW-B:0/0]
+  - [SW-B:0/1, PC-B:0/0]
