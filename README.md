@@ -17,6 +17,48 @@ server:
   password: <パスワード>
 ```
 
+## 別の環境（他の人のPC）へ移植するとき
+
+このツールはリポジトリのコードだけでなく、**接続先のGNS3サーバー側の状態**にも依存します。
+移植先ごとに必ず合わせる必要があるのは次の2点です。
+
+### 1. アクセス先とアカウント（`gns3lab_config.yml`）
+
+- `gns3lab_config.yml` は `.gitignore` 対象なので、`git clone` しただけでは付いてきません。
+  フォルダごとコピーして渡す場合は、実際のパスワードが平文で入っているため、渡す前に
+  `gns3lab_config.yml` を削除して `gns3lab_config.yml.example` だけ残してください。
+- 移植先では `gns3lab_config.yml.example` をコピーして `gns3lab_config.yml` を作り、その環境に
+  合わせて書き換えます。
+
+  | 項目 | 確認方法 |
+  |---|---|
+  | `base`（GNS3サーバーのURL） | GNS3 GUIの `Edit > Preferences > Server > Local Server` にある Host/Port。同じPC上でGNS3を動かす場合は `http://127.0.0.1:<port>/v2` |
+  | `user` / `password` | 同じ画面の Authentication欄。または `%APPDATA%\GNS3\<version>\gns3_server.ini`（GNS3 2.xの場合）の `[Server]` セクションにある `user` / `password`（`auth = True` の場合のみ必要。`auth = False` なら認証自体不要で `user`/`password` は空でも動きます） |
+
+- 実行時にこのファイルが無いと `設定ファイルが見つかりません` というエラーで即終了するので、
+  移植直後に何か動かない場合はまずここを確認してください。
+
+### 2. テンプレート（`template:` に書く名前）
+
+`topology.yml` の `template:` は文字列一致で **GNS3サーバー側に既に登録されているテンプレート名**
+を参照します。このツール自体はテンプレートを作成しないため、移植先のGNS3サーバーに同名の
+テンプレートが無ければ `deploy` はテンプレート未検出のエラーで失敗します。
+
+- 移植先でまず次を実行し、実際に使えるテンプレート名を確認します。
+
+  ```
+  gns3lab templates
+  ```
+
+- `c3725` などのDynamips系ルータテンプレートは、**移植先のGNS3に同じIOSイメージが登録されて
+  初めて使えます**。GNS3自体はCisco IOSイメージを配布していない（ライセンスの都合）ため、
+  IOSイメージは利用者側で用意し、GNS3 GUIの `Edit > Preferences > Dynamips > IOS Routers`
+  （または `File > Import appliance` でのアプライアンス取り込み）からテンプレートとして
+  登録しておく必要があります。`VPCS` はGNS3に標準搭載されているため追加作業は不要です。
+- 移植先で用意したテンプレート名が付属サンプルと異なる場合（例: `c3725` ではなく `c7200` を
+  使っている等）は、`topology.yml` 側の `template:` を `gns3lab templates` の出力に合わせて
+  書き換えてください。
+
 ## 使い方
 
 ### 1. 使えるテンプレート名を確認する
