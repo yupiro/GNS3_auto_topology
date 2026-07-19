@@ -7,6 +7,7 @@ from pathlib import Path
 from tkinter import filedialog, scrolledtext, ttk
 from types import SimpleNamespace
 
+import requests
 import yaml
 
 from .cli import cmd_configure, cmd_deploy, cmd_destroy, cmd_list, cmd_templates, parse_endpoint
@@ -77,6 +78,9 @@ class App:
         self._build_destroy_tab(notebook)
         self._build_list_tab(notebook)
         self._build_templates_tab(notebook)
+
+        self.notebook = notebook
+        notebook.bind("<<NotebookTabChanged>>", self._on_tab_changed)
 
         out_frame = ttk.Frame(root, padding=8)
         out_frame.pack(fill="both", expand=True)
@@ -188,6 +192,12 @@ class App:
         frame = ttk.Frame(notebook, padding=10)
         notebook.add(frame, text="templates")
         ttk.Button(frame, text="Templates 実行", command=self.run_templates).pack(anchor="w")
+
+    def _on_tab_changed(self, event):
+        notebook = event.widget
+        tab = notebook.nametowidget(notebook.select())
+        notebook.update_idletasks()
+        notebook.configure(height=tab.winfo_reqheight())
 
     # --- file pickers ---
 
@@ -331,6 +341,12 @@ class App:
             with redirect_stdout(writer), redirect_stderr(writer):
                 try:
                     func(args)
+                except requests.exceptions.ConnectionError as e:
+                    self.queue.put(
+                        "\n[エラー] GNS3サーバーに接続できません。"
+                        "サーバーが起動しているか、設定ファイルの接続先(URL/ポート)が"
+                        f"正しいか確認してください。\n詳細: {e}\n"
+                    )
                 except SystemExit as e:
                     self.queue.put(f"\n[エラー] {e}\n")
                 except Exception as e:
