@@ -1,6 +1,6 @@
 # WAN拠点間 冗長化ネットワーク 詳細設計書
 
-- **対象トポロジー**: [`wan_gre_mpls_redundancy.yml`](../wan_gre_mpls_redundancy.yml)
+- **対象トポロジー**: [`wan_gre_mpls_redundancy.yml`](../examples/wan_gre_mpls_redundancy.yml)
 - **版数**: 1.0
 - **前提**: [基本設計書](./wan-redundancy-basic-design.md) で定めた方針を、実際のIPアドレス・インターフェース・ルーティングパラメータ・コンフィグまで落とし込み、実機検証で得られた結果とあわせて記録する。
 
@@ -111,7 +111,7 @@ router ospf 1
  network 172.31.0.0 0.0.0.3 area 0
 ```
 
-全文は [`wan_gre_mpls_redundancy.yml`](../wan_gre_mpls_redundancy.yml) の各ノードの `config:` を参照。
+全文は [`wan_gre_mpls_redundancy.yml`](../examples/wan_gre_mpls_redundancy.yml) の各ノードの `config:` を参照。
 
 ## 6. 試験項目・結果
 

@@ -20,7 +20,8 @@ server:
 ## 別の環境（他の人のPC）へ移植するとき
 
 このツールはリポジトリのコードだけでなく、**接続先のGNS3サーバー側の状態**にも依存します。
-移植先ごとに必ず合わせる必要があるのは次の2点です。
+移植先ごとに必ず合わせる必要があるのは1・2です。3は任意ですが、設定しておくと
+トポロジーファイルを直接編集せずに移植できます。
 
 ### 1. アクセス先とアカウント（`gns3lab_config.yml`）
 
@@ -55,9 +56,35 @@ server:
   IOSイメージは利用者側で用意し、GNS3 GUIの `Edit > Preferences > Dynamips > IOS Routers`
   （または `File > Import appliance` でのアプライアンス取り込み）からテンプレートとして
   登録しておく必要があります。`VPCS` はGNS3に標準搭載されているため追加作業は不要です。
-- 移植先で用意したテンプレート名が付属サンプルと異なる場合（例: `c3725` ではなく `c7200` を
-  使っている等）は、`topology.yml` 側の `template:` を `gns3lab templates` の出力に合わせて
-  書き換えてください。
+
+移植先で用意したテンプレート名が付属サンプルと異なる場合（例: `c3725` ではなく `c7200` を
+使っている等）、従来は各トポロジーファイルの `template:` を1つずつ書き換える必要がありました。
+`examples/` のサンプルは代わりに **役割名 → 実テンプレート名の対応表**
+（`gns3lab_templates.yml`、下記「テンプレート対応表」参照）を経由するため、
+環境ごとにこのファイル1つを書き換えるだけで済みます。
+
+### 3. テンプレート対応表（`gns3lab_templates.yml`、任意）
+
+`gns3lab_config.yml` と同様に `.gitignore` 対象・環境ごとに固有のファイルです。
+`gns3lab_templates.yml.example` をコピーして作成します。
+
+```yaml
+templates:
+  ios-router: c3725                          # 環境によっては c7200 等に読み替え
+  iosv-router: "Cisco IOSv 15.9(3)M12"
+  asav-firewall: "Cisco ASAv 9.24.1 CML"
+```
+
+- トポロジーYAML側の `template:` にこの対応表のキー（例: `ios-router`）を書いておくと、
+  `deploy` 実行時にこのファイルを見て実際のテンプレート名に解決してからノードを作成します。
+- 対応表に無いキーが指定された場合は、これまで通り `template:` の値をテンプレート名
+  そのものとして探索します（対応表は完全に任意・省略可）。
+- 対応表のパスは `gns3lab deploy -m <パス>` で変更できます（省略時はカレントディレクトリの
+  `gns3lab_templates.yml`）。
+- **注意**: 役割名はあくまで名前解決のためのエイリアスです。`config:` に書く投入内容は
+  機種依存（例: c3725系は `FastEthernet0/0`、IOSv系は `GigabitEthernet0/0`）なので、
+  対応表で全く異なるプラットフォームに差し替えると `config:` の内容と機種が一致しなくなります。
+  同じインターフェース構成・CLI体系を持つ機種同士（例: `c3725` ↔ `c7200`）の読み替えに使ってください。
 
 ## 使い方
 
@@ -71,7 +98,7 @@ gns3lab templates
 
 ### 2. トポロジをYAMLで定義する
 
-`topology.yml` を参考に、好きな構成のファイルを作成します。
+`examples/topology.yml` を参考に、好きな構成のファイルを作成します。
 
 ```yaml
 name: mixed_lab
@@ -97,14 +124,18 @@ links:
 
 - `nodes`: ノード名 → テンプレート名・座標
 - `links`: `[ノード名:adapter/port, ノード名:adapter/port]` の形式で2端点を指定
+- `template:` にはテンプレート名をそのまま書く以外に、`gns3lab_templates.yml` で
+  定義した役割名（例: `ios-router`）を書くこともできます。詳しくは前述の
+  「3. テンプレート対応表」を参照してください。
 
-より複雑な構成例（MPLS L3VPN検証ラボ）は `mpls_topology.yml` を参照してください。
+トポロジー例は `examples/` ディレクトリにまとめています:
 
-その他の構成例:
-
-- `financial_wan_topology.yml`: 東京DC(本番)/大阪DC(DR)/本店をWAN経由で接続し、ASAvファイアウォールでDMZを分離した金融系トポロジー
-- `wan_gre_mpls_redundancy.yml`: MPLSプライマリ経路 + GRE over IPsec VPNバックアップ経路によるWAN冗長化トポロジー
+- `examples/topology.yml`: MPLS L3VPN検証ラボ（基本的な構成例）
+- `examples/financial_wan_topology.yml`: 東京DC(本番)/大阪DC(DR)/本店をWAN経由で接続し、ASAvファイアウォールでDMZを分離した金融系トポロジー
+- `examples/wan_gre_mpls_redundancy.yml`: MPLSプライマリ経路 + GRE over IPsec VPNバックアップ経路によるWAN冗長化トポロジー
   - 設計書: [基本設計書](docs/wan-redundancy-basic-design.md) / [詳細設計書](docs/wan-redundancy-detailed-design.md)
+- `examples/nat_topology.yml`: 内部LAN(PC1/PC2/SVR1) - NATルーター(R1) - 外部ホスト(EXT-PC) による
+  動的PAT(overload)と静的NATの検証トポロジー
 
 ### 2b. ノードに初期設定を持たせる（config自動投入）
 
@@ -147,7 +178,7 @@ nodes:
 ### 3. デプロイ
 
 ```
-gns3lab deploy topology.yml
+gns3lab deploy examples/topology.yml
 ```
 
 プロジェクト作成 → ノード作成 → リンク作成 → 全ノード起動 → (config定義があれば)設定投入、
@@ -155,20 +186,22 @@ gns3lab deploy topology.yml
 
 - `--no-start`: ノードを起動しない（起動しないため設定投入も自動でスキップされます）
 - `--no-config`: ノードは起動するが、`config:` の自動投入は行わない
+- `-m/--template-map`: テンプレート対応表のパスを指定（省略時はカレントディレクトリの
+  `gns3lab_templates.yml`。ファイルが無くてもエラーにはならず、単に対応表無しとして扱われます）
 
 ```
-gns3lab deploy topology.yml --no-config
+gns3lab deploy examples/topology.yml --no-config
 ```
 
 同名プロジェクトが既に存在する場合はエラーになります（先に `destroy` してください）。
 
 ### 3b. 起動中のプロジェクトへ設定だけ再投入する
 
-`topology.yml` の `config:` を書き換えた後、プロジェクトを作り直さずに設定だけ
+`examples/topology.yml` の `config:` を書き換えた後、プロジェクトを作り直さずに設定だけ
 再投入したい場合は `configure` を使います。
 
 ```
-gns3lab configure topology.yml
+gns3lab configure examples/topology.yml
 ```
 
 - `topology.yml` の `name` からプロジェクトを検索し、既存ノードの一覧を取得した上で、
@@ -184,6 +217,30 @@ gns3lab list
 ```
 
 サーバー上の全プロジェクトを name / status / project_id で一覧表示します。
+
+指定したプロジェクトの中身（ノードごとのテンプレート/status/コンソールポートと、
+リンクの接続関係）まで見たい場合は `status` を使います。
+
+```
+gns3lab status mixed_lab
+```
+
+```
+Project: mixed_lab  status=opened  project_id=xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx
+
+name                 template                     status     console
+------------------------------------------------------------------------------------------
+PC1                  VPCS                         started    127.0.0.1:5001
+R1                   Cisco_L3SW                    started    127.0.0.1:5002
+SW1                  Cisco_L2SW                    started    127.0.0.1:5003
+
+links (2):
+  R1:0/0 -- SW1:0/0
+  SW1:0/1 -- PC1:0/0
+```
+
+トポロジーYAMLを介さず、**GNS3サーバー側の現在の実際の状態**を直接取得して表示するため、
+手動でノードを追加/変更したプロジェクトの状態確認や、`deploy` が失敗した際の途中経過確認にも使えます。
 
 ### 5. 削除
 
@@ -209,12 +266,14 @@ gns3lab-gui
   少し経つと右側の構成図（ノード種別ごとに色分けしたCanvas図）が自動的に再描画されます。
   YAMLが壊れていてもアプリはクラッシュせず、右下にエラー内容が表示されるだけです。
   「開く...」「保存」ボタンでファイルの読み込み・上書き保存ができます。
-- **deploy**: トポロジファイルを指定して実行。「起動しない (--no-start)」「設定を投入
-  しない (--no-config)」のチェックボックスと、「Deploy 実行」ボタンあり。
-  隣の「設定を再投入 (configure)」ボタンは、既存プロジェクトを作り直さずに
-  `config:` だけを再投入します（`gns3lab configure` と同じ）。
+- **deploy**: トポロジファイルとテンプレート対応表（`gns3lab_templates.yml`、任意）を指定して
+  実行。「起動しない (--no-start)」「設定を投入しない (--no-config)」のチェックボックスと、
+  「Deploy 実行」ボタンあり。隣の「設定を再投入 (configure)」ボタンは、既存プロジェクトを
+  作り直さずに `config:` だけを再投入します（`gns3lab configure` と同じ）。
 - **destroy**: プロジェクト名（またはproject_id）を指定して停止・削除。
 - **list**: サーバー上の全プロジェクトを一覧表示。
+- **status**: プロジェクト名（またはproject_id）を指定して、ノード（テンプレート/status/
+  コンソールポート）とリンクの一覧を表示（`gns3lab status` と同じ）。
 - **templates**: 利用可能なテンプレート名を一覧表示。
 
 実行結果は下部の出力欄にリアルタイム表示されます。
@@ -239,6 +298,7 @@ pyinstaller --onefile --windowed --name gns3lab-gui --paths src scripts/build_gu
 gns3lab.exe templates
 gns3lab.exe deploy topology.yml
 gns3lab.exe list
+gns3lab.exe status mixed_lab
 gns3lab.exe destroy mixed_lab
 ```
 

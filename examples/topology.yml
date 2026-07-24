@@ -10,6 +10,11 @@
 # 各ノードの config: ブロックは `gns3lab deploy` 実行時に自動でコンソールへ投入される
 # (--no-start / --no-config を付けるとスキップされる)。
 #
+# template: は実テンプレート名 "c3725" ではなく役割名 "ios-router" を指定している。
+# gns3lab_templates.yml (無ければ gns3lab_templates.yml.example をコピー) で
+# ios-router -> 実際のテンプレート名 の対応を環境ごとに設定すれば、このファイルを
+# 直接編集せずに別のGNS3サーバーへそのままデプロイできる。
+#
 # --- IPアドレス計画 ---
 #   PC1-CE1  : 192.168.1.0/24  (CE1=.1, PC1=.10)
 #   CE1-PE1  : 10.1.1.0/30     (CE1=.1, PE1=.2)
@@ -40,7 +45,7 @@ nodes:
       save
 
   CE1:
-    template: c3725
+    template: ios-router
     x: -300
     y: 0
     config: |
@@ -54,7 +59,7 @@ nodes:
       ip route 0.0.0.0 0.0.0.0 10.1.1.2
 
   PE1:
-    template: c3725
+    template: ios-router
     x: -150
     y: 0
     config: |
@@ -92,7 +97,7 @@ nodes:
        exit-address-family
 
   P1:
-    template: c3725
+    template: ios-router
     x: 0
     y: 0
     config: |
@@ -116,7 +121,7 @@ nodes:
       mpls ldp router-id Loopback0 force
 
   PE2:
-    template: c3725
+    template: ios-router
     x: 150
     y: 0
     config: |
@@ -154,7 +159,7 @@ nodes:
        exit-address-family
 
   CE2:
-    template: c3725
+    template: ios-router
     x: 300
     y: 0
     config: |

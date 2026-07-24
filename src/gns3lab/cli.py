@@ -5,7 +5,7 @@ import sys
 import requests
 import yaml
 
-from .config import load_config
+from .config import TEMPLATE_MAP_FILENAME, load_config, load_template_map
 from .console import ConsoleError, push_node_config
 
 if sys.stdout is not None:
@@ -88,9 +88,30 @@ def push_configs(base, nodes_by_name, topo):
             print(f"{node_name}: 失敗 - {e}")
 
 
+def resolve_template_name(template_name, template_map, template_ids):
+    """topology.yml の template: を、対応表があればそれで解決してから実テンプレート名を返す。
+
+    対応表に無いキーはこれまで通りテンプレート名そのものとして探索する(対応表は任意)。
+    """
+    resolved_name = template_map.get(template_name, template_name)
+    if resolved_name not in template_ids:
+        via_map = (
+            f" ('{template_name}' は対応表で '{resolved_name}' に解決されました)"
+            if resolved_name != template_name
+            else ""
+        )
+        raise SystemExit(
+            f"テンプレート '{resolved_name}' が見つかりません。{via_map}\n"
+            f"`gns3lab templates` で有効なテンプレート名を確認し、"
+            f"必要なら {TEMPLATE_MAP_FILENAME} で対応表を設定してください。"
+        )
+    return resolved_name
+
+
 def cmd_deploy(args):
     base, auth = load_config(args.config)
     topo = load_topology(args.topology)
+    template_map = load_template_map(getattr(args, "template_map", None))
 
     existing = find_project_by_name(base, auth, topo["name"])
     if existing:
@@ -109,11 +130,9 @@ def cmd_deploy(args):
     nodes = {}
     for node_name, node_def in topo["nodes"].items():
         template_name = node_def["template"]
-        if template_name not in template_ids:
-            raise SystemExit(
-                f"テンプレート '{template_name}' が見つかりません。"
-                f" `gns3lab templates` で有効なテンプレート名を確認してください。"
-            )
+        resolved_name = resolve_template_name(template_name, template_map, template_ids)
+        if resolved_name != template_name:
+            print(f"{node_name}: template '{template_name}' -> '{resolved_name}'")
 
         payload = {
             "name": node_name,
@@ -122,7 +141,7 @@ def cmd_deploy(args):
             "compute_id": node_def.get("compute_id", "vm"),
         }
         res = requests.post(
-            f"{base}/projects/{project_id}/templates/{template_ids[template_name]}",
+            f"{base}/projects/{project_id}/templates/{template_ids[resolved_name]}",
             json=payload,
             auth=auth,
         )
@@ -223,6 +242,42 @@ def cmd_list(args):
         print(f"{p['name']:<30} {p['status']:<10} {p['project_id']}")
 
 
+def cmd_status(args):
+    base, auth = load_config(args.config)
+
+    project = find_project_by_name(base, auth, args.name)
+    if project is None:
+        res = requests.get(f"{base}/projects/{args.name}", auth=auth)
+        if res.status_code == 200:
+            project = res.json()
+        else:
+            raise SystemExit(f"プロジェクト '{args.name}' が見つかりません")
+
+    project_id = project["project_id"]
+    nodes = check_response(requests.get(f"{base}/projects/{project_id}/nodes", auth=auth), "list nodes")
+    links = check_response(requests.get(f"{base}/projects/{project_id}/links", auth=auth), "list links")
+    templates_by_id = {t["template_id"]: t.get("name", "") for t in list_templates(base, auth)}
+    nodes_by_id = {n["node_id"]: n for n in nodes}
+
+    print(f"\nProject: {project['name']}  status={project['status']}  project_id={project_id}\n")
+
+    print(f"{'name':<20} {'template':<28} {'status':<10} console")
+    print("-" * 90)
+    for n in sorted(nodes, key=lambda n: n["name"]):
+        template_name = templates_by_id.get(n.get("template_id"), n.get("node_type", ""))
+        console = f"{n['console_host']}:{n['console']}" if n.get("console") else "-"
+        print(f"{n['name']:<20} {template_name:<28} {n['status']:<10} {console}")
+
+    print(f"\nlinks ({len(links)}):")
+    for link in links:
+        endpoints = []
+        for ep in link.get("nodes", []):
+            node = nodes_by_id.get(ep["node_id"])
+            name = node["name"] if node else ep["node_id"]
+            endpoints.append(f"{name}:{ep['adapter_number']}/{ep['port_number']}")
+        print("  " + " -- ".join(endpoints))
+
+
 def cmd_templates(args):
     base, auth = load_config(args.config)
     templates = list_templates(base, auth)
@@ -246,6 +301,11 @@ def main():
     p_deploy.add_argument(
         "--no-config", action="store_true", help="定義されたconfigの自動投入を行わない"
     )
+    p_deploy.add_argument(
+        "-m",
+        "--template-map",
+        help="テンプレート対応表のパス (省略時はカレントディレクトリの gns3lab_templates.yml。無くても動作する)",
+    )
     p_deploy.set_defaults(func=cmd_deploy)
 
     p_configure = sub.add_parser(
@@ -260,6 +320,12 @@ def main():
 
     p_list = sub.add_parser("list", help="既存プロジェクト一覧を表示する")
     p_list.set_defaults(func=cmd_list)
+
+    p_status = sub.add_parser(
+        "status", help="指定プロジェクトのノード/リンクの現在状態を一覧表示する"
+    )
+    p_status.add_argument("name", help="プロジェクト名 または project_id")
+    p_status.set_defaults(func=cmd_status)
 
     p_templates = sub.add_parser("templates", help="利用可能なテンプレート一覧を表示する")
     p_templates.set_defaults(func=cmd_templates)

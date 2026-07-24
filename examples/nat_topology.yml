@@ -1,0 +1,111 @@
+# NAT (PAT/静的NAT) 検証用トポロジー
+#
+# 構成: PC1,PC2,SVR1 - SW-IN - R1 - EXT-PC
+#   PC1/PC2 : 内部LANの一般クライアント (VPCS)
+#   SVR1    : 内部LANの公開サーバー役 (VPCS、静的NATで外部から到達可能にする)
+#   SW-IN   : 内部LANスイッチ (config投入なし)
+#   R1      : NATルーター (c3725。inside/outside両インターフェースでNATを実施)
+#   EXT-PC  : インターネット上のホストを模したノード (VPCS)
+#
+# 全機種 c3725 はオンボード2ポート (FastEthernet0/0, 0/1) のみを使用。
+# 各ノードの config: ブロックは `gns3lab deploy` 実行時に自動でコンソールへ投入される
+# (--no-start / --no-config を付けるとスキップされる)。
+#
+# template: は実テンプレート名 "c3725" ではなく役割名 "ios-router" を指定している。
+# gns3lab_templates.yml で ios-router -> 実際のテンプレート名 の対応を環境ごとに
+# 設定すれば、このファイルを直接編集せずに別のGNS3サーバーへそのままデプロイできる。
+#
+# --- IPアドレス計画 ---
+#   内部(inside) : 192.168.1.0/24
+#     R1 Fa0/0=.1, PC1=.10, PC2=.11, SVR1=.100
+#   外部(outside): 203.0.113.0/24  (RFC5737 検証用アドレス)
+#     R1 Fa0/1=.1, EXT-PC=.10
+#     SVR1の静的NAT公開アドレス = 203.0.113.100
+#
+#   NAT方式:
+#     - PC1/PC2 => 動的PAT (ip nat inside source list 1 interface FastEthernet0/1 overload)
+#       内部192.168.1.0/24全体がoverload対象だが、SVR1(.100)は下記の静的NATが
+#       優先されるためPC1/PC2のみが実質的にPATで203.0.113.1を共有する。
+#     - SVR1   => 静的NAT (ip nat inside source static 192.168.1.100 203.0.113.100)
+#       外部から203.0.113.100宛のアクセスがSVR1(192.168.1.100)へ変換される。
+#
+# --- 検証手順の例 (デプロイ後) ---
+#   1. PC1 -> ping 203.0.113.10 (EXT-PC) が通ることを確認
+#   2. PC2 -> ping 203.0.113.10 も通ることを確認したうえで、
+#      R1で `show ip nat translations` を実行し、PC1/PC2それぞれの内部アドレスが
+#      同一の外部アドレス(203.0.113.1)・異なるポート番号に変換されていること
+#      (動的PAT=overloadの動作)を確認
+#   3. EXT-PC -> ping 203.0.113.100 が通ることを確認し、R1の
+#      `show ip nat translations` で 192.168.1.100 <-> 203.0.113.100 の
+#      静的な1:1変換エントリが常時存在することを確認 (--- が付き、通信の有無に
+#      関わらずエントリが残る点がPATとの違い)
+#   4. EXT-PC -> ping 192.168.1.10 (PC1の内部アドレスに直接) は失敗することを確認
+#      (対応する変換エントリが無く、外部から内部プライベートアドレスへは
+#      到達できないことの確認)
+#   5. R1で `show ip nat statistics` を実行し、Total active translations や
+#      Hits/Misses を確認
+
+name: nat_lab
+
+nodes:
+  PC1:
+    template: VPCS
+    x: -300
+    y: 200
+    config: |
+      ip 192.168.1.10 255.255.255.0 192.168.1.1
+      save
+
+  PC2:
+    template: VPCS
+    x: -150
+    y: 200
+    config: |
+      ip 192.168.1.11 255.255.255.0 192.168.1.1
+      save
+
+  SVR1:
+    template: VPCS
+    x: 0
+    y: 200
+    config: |
+      ip 192.168.1.100 255.255.255.0 192.168.1.1
+      save
+
+  SW-IN:
+    template: Ethernet switch
+    x: -150
+    y: 50
+
+  R1:
+    template: ios-router
+    x: -150
+    y: -100
+    config: |
+      hostname R1
+      interface FastEthernet0/0
+       ip address 192.168.1.1 255.255.255.0
+       ip nat inside
+       no shutdown
+      interface FastEthernet0/1
+       ip address 203.0.113.1 255.255.255.0
+       ip nat outside
+       no shutdown
+      access-list 1 permit 192.168.1.0 0.0.0.255
+      ip nat inside source list 1 interface FastEthernet0/1 overload
+      ip nat inside source static 192.168.1.100 203.0.113.100
+
+  EXT-PC:
+    template: VPCS
+    x: 100
+    y: -100
+    config: |
+      ip 203.0.113.10 255.255.255.0 203.0.113.1
+      save
+
+links:
+  - [PC1:0/0, SW-IN:0/0]
+  - [PC2:0/0, SW-IN:0/1]
+  - [SVR1:0/0, SW-IN:0/2]
+  - [SW-IN:0/3, R1:0/0]
+  - [R1:0/1, EXT-PC:0/0]

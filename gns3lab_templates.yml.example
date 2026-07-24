@@ -1,0 +1,16 @@
+# topology.yml の template: に書く「役割名」→ このGNS3サーバーに実在するテンプレート名、の対応表。
+# gns3lab_config.yml と同じくサーバーごとに異なる内容なので、コピーして
+# gns3lab_templates.yml を作り、環境に合わせて書き換えてください（このファイル自体はexampleでありgit管理対象）。
+# 実際に登録されているテンプレート名は `gns3lab templates` で確認できます。
+#
+# このファイルは省略可能です。無い場合や、ここに無いキーが template: に指定された場合は、
+# 従来通り template: の値をテンプレート名そのものとして探索します。
+#
+# 付属のトポロジー例(examples/*.yml)は下記の役割名を使っています。
+templates:
+  # ダイナミップス系ルーター (FastEthernet 2ポート、config自動投入に対応)
+  ios-router: c3725
+  # QEMU系ルーター (GigabitEthernet、config自動投入は非対応・GNS3コンソールから手動投入)
+  iosv-router: "Cisco IOSv 15.9(3)M12"
+  # QEMU系ファイアウォール (config自動投入は非対応・GNS3コンソールから手動投入)
+  asav-firewall: "Cisco ASAv 9.24.1 CML"

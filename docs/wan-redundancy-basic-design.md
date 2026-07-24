@@ -1,6 +1,6 @@
 # WAN拠点間 冗長化ネットワーク 基本設計書
 
-- **対象トポロジー**: [`wan_gre_mpls_redundancy.yml`](../wan_gre_mpls_redundancy.yml)
+- **対象トポロジー**: [`wan_gre_mpls_redundancy.yml`](../examples/wan_gre_mpls_redundancy.yml)
 - **版数**: 1.0
 - **ステータス**: GNS3実機検証済み（[試験結果は詳細設計書を参照](./wan-redundancy-detailed-design.md#6-試験項目結果)）
 

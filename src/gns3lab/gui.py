@@ -10,7 +10,15 @@ from types import SimpleNamespace
 import requests
 import yaml
 
-from .cli import cmd_configure, cmd_deploy, cmd_destroy, cmd_list, cmd_templates, parse_endpoint
+from .cli import (
+    cmd_configure,
+    cmd_deploy,
+    cmd_destroy,
+    cmd_list,
+    cmd_status,
+    cmd_templates,
+    parse_endpoint,
+)
 
 TOPO_COLORS = {
     "router": {"fill": "#e3eafd", "outline": "#3763e8"},
@@ -77,6 +85,7 @@ class App:
         self._build_deploy_tab(notebook)
         self._build_destroy_tab(notebook)
         self._build_list_tab(notebook)
+        self._build_status_tab(notebook)
         self._build_templates_tab(notebook)
 
         self.notebook = notebook
@@ -150,22 +159,33 @@ class App:
         )
         ttk.Button(frame, text="参照...", command=self.browse_topology).grid(row=0, column=2)
 
+        ttk.Label(frame, text="テンプレート対応表 (任意):").grid(row=1, column=0, sticky="w")
+        self.template_map_var = tk.StringVar(
+            value=str(Path.cwd() / "gns3lab_templates.yml")
+        )
+        ttk.Entry(frame, textvariable=self.template_map_var).grid(
+            row=1, column=1, sticky="ew", padx=4
+        )
+        ttk.Button(frame, text="参照...", command=self.browse_template_map).grid(
+            row=1, column=2
+        )
+
         self.no_start_var = tk.BooleanVar(value=False)
         ttk.Checkbutton(
             frame, text="起動しない (--no-start)", variable=self.no_start_var
-        ).grid(row=1, column=1, sticky="w", pady=(6, 0))
+        ).grid(row=2, column=1, sticky="w", pady=(6, 0))
 
         self.no_config_var = tk.BooleanVar(value=False)
         ttk.Checkbutton(
             frame, text="設定を投入しない (--no-config)", variable=self.no_config_var
-        ).grid(row=2, column=1, sticky="w", pady=(0, 6))
+        ).grid(row=3, column=1, sticky="w", pady=(0, 6))
 
         ttk.Button(frame, text="Deploy 実行", command=self.run_deploy).grid(
-            row=3, column=1, sticky="w", pady=6
+            row=4, column=1, sticky="w", pady=6
         )
         ttk.Button(
             frame, text="設定を再投入 (configure)", command=self.run_configure
-        ).grid(row=3, column=2, sticky="w", pady=6, padx=(6, 0))
+        ).grid(row=4, column=2, sticky="w", pady=6, padx=(6, 0))
         frame.columnconfigure(1, weight=1)
 
     def _build_destroy_tab(self, notebook):
@@ -187,6 +207,21 @@ class App:
         frame = ttk.Frame(notebook, padding=10)
         notebook.add(frame, text="list")
         ttk.Button(frame, text="List 実行", command=self.run_list).pack(anchor="w")
+
+    def _build_status_tab(self, notebook):
+        frame = ttk.Frame(notebook, padding=10)
+        notebook.add(frame, text="status")
+
+        ttk.Label(frame, text="プロジェクト名 / project_id:").grid(row=0, column=0, sticky="w")
+        self.status_name_var = tk.StringVar()
+        ttk.Entry(frame, textvariable=self.status_name_var).grid(
+            row=0, column=1, sticky="ew", padx=4
+        )
+
+        ttk.Button(frame, text="Status 実行", command=self.run_status).grid(
+            row=1, column=1, sticky="w", pady=6
+        )
+        frame.columnconfigure(1, weight=1)
 
     def _build_templates_tab(self, notebook):
         frame = ttk.Frame(notebook, padding=10)
@@ -214,6 +249,14 @@ class App:
         )
         if path:
             self.topology_var.set(path)
+
+    def browse_template_map(self):
+        path = filedialog.askopenfilename(
+            title="テンプレート対応表ファイルを選択",
+            filetypes=[("YAML", "*.yml *.yaml"), ("All", "*.*")],
+        )
+        if path:
+            self.template_map_var.set(path)
 
     # --- topology editor ---
 
@@ -370,6 +413,7 @@ class App:
             topology=self.topology_var.get(),
             no_start=self.no_start_var.get(),
             no_config=self.no_config_var.get(),
+            template_map=self.template_map_var.get() or None,
         )
         self._run_in_thread(cmd_deploy, args)
 
@@ -389,6 +433,12 @@ class App:
     def run_list(self):
         args = SimpleNamespace(config=self.config_var.get() or None)
         self._run_in_thread(cmd_list, args)
+
+    def run_status(self):
+        args = SimpleNamespace(
+            config=self.config_var.get() or None, name=self.status_name_var.get()
+        )
+        self._run_in_thread(cmd_status, args)
 
     def run_templates(self):
         args = SimpleNamespace(config=self.config_var.get() or None)

@@ -2,6 +2,7 @@ venv/
 __pycache__/
 *.pyc
 gns3lab_config.yml
+gns3lab_templates.yml
 *.egg-info/
 build/
 dist/
