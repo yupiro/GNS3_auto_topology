@@ -3,11 +3,16 @@
 # gns3lab_templates.yml を作り、環境に合わせて書き換えてください（このファイル自体はexampleでありgit管理対象）。
 # 実際に登録されているテンプレート名は `gns3lab templates` で確認できます。
 #
-# このファイルは省略可能です。無い場合や、ここに無いキーが template: に指定された場合は、
-# 従来通り template: の値をテンプレート名そのものとして探索します。
+# topology.yml の template: は常にこのファイルのキー(役割名)を書きます。
+# ここに無い役割名を使うと `deploy` はエラーで止まります。GUIの「テンプレート対応」タブから
+# 編集する方が楽です(サーバーのテンプレート一覧をドロップダウンから選べます)。
 #
 # 付属のトポロジー例(examples/*.yml)は下記の役割名を使っています。
 templates:
+  # GNS3標準搭載 (追加登録不要)
+  vpcs: VPCS
+  switch: Ethernet switch
+  nat: NAT
   # ダイナミップス系ルーター (FastEthernet 2ポート、config自動投入に対応)
   ios-router: c3725
   # QEMU系ルーター (GigabitEthernet、config自動投入は非対応・GNS3コンソールから手動投入)

@@ -49,7 +49,7 @@ name: nat_lab
 
 nodes:
   PC1:
-    template: VPCS
+    template: vpcs
     x: -300
     y: 200
     config: |
@@ -57,7 +57,7 @@ nodes:
       save
 
   PC2:
-    template: VPCS
+    template: vpcs
     x: -150
     y: 200
     config: |
@@ -65,7 +65,7 @@ nodes:
       save
 
   SVR1:
-    template: VPCS
+    template: vpcs
     x: 0
     y: 200
     config: |
@@ -73,7 +73,7 @@ nodes:
       save
 
   SW-IN:
-    template: Ethernet switch
+    template: switch
     x: -150
     y: 50
 
@@ -96,7 +96,7 @@ nodes:
       ip nat inside source static 192.168.1.100 203.0.113.100
 
   EXT-PC:
-    template: VPCS
+    template: vpcs
     x: 100
     y: -100
     config: |

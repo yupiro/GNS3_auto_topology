@@ -1,6 +1,7 @@
 import argparse
 import re
 import sys
+from pathlib import Path
 
 import requests
 import yaml
@@ -36,6 +37,21 @@ def load_topology(path):
 
     topo.setdefault("links", [])
     return topo
+
+
+def resolve_project_target(name_or_path):
+    """destroyの引数を解決する。topology.yml へのパスならその name: を、
+    そうでなければ受け取った文字列(プロジェクト名 or project_id)をそのまま返す。
+    """
+    path = Path(name_or_path)
+    if path.suffix.lower() in (".yml", ".yaml") and path.is_file():
+        with open(path, encoding="utf-8") as f:
+            topo = yaml.safe_load(f) or {}
+        name = topo.get("name")
+        if not name:
+            raise SystemExit(f"{name_or_path} に name がありません")
+        return name
+    return name_or_path
 
 
 def parse_endpoint(endpoint):
@@ -88,22 +104,18 @@ def push_configs(base, nodes_by_name, topo):
             print(f"{node_name}: 失敗 - {e}")
 
 
-def resolve_template_name(template_name, template_map, template_ids):
-    """topology.yml の template: を、対応表があればそれで解決してから実テンプレート名を返す。
-
-    対応表に無いキーはこれまで通りテンプレート名そのものとして探索する(対応表は任意)。
-    """
-    resolved_name = template_map.get(template_name, template_name)
-    if resolved_name not in template_ids:
-        via_map = (
-            f" ('{template_name}' は対応表で '{resolved_name}' に解決されました)"
-            if resolved_name != template_name
-            else ""
-        )
+def resolve_template_name(role_name, template_map, template_ids):
+    """topology.yml の template: (役割名) を対応表で実テンプレート名に解決する。"""
+    resolved_name = template_map.get(role_name)
+    if resolved_name is None:
         raise SystemExit(
-            f"テンプレート '{resolved_name}' が見つかりません。{via_map}\n"
-            f"`gns3lab templates` で有効なテンプレート名を確認し、"
-            f"必要なら {TEMPLATE_MAP_FILENAME} で対応表を設定してください。"
+            f"役割名 '{role_name}' が {TEMPLATE_MAP_FILENAME} に定義されていません。\n"
+            f"GUIの「テンプレート対応」タブか、{TEMPLATE_MAP_FILENAME} に追加してください。"
+        )
+    if resolved_name not in template_ids:
+        raise SystemExit(
+            f"テンプレート '{resolved_name}' ('{role_name}' の対応先) が見つかりません。\n"
+            f"`gns3lab templates` で有効なテンプレート名を確認してください。"
         )
     return resolved_name
 
@@ -111,7 +123,7 @@ def resolve_template_name(template_name, template_map, template_ids):
 def cmd_deploy(args):
     base, auth = load_config(args.config)
     topo = load_topology(args.topology)
-    template_map = load_template_map(getattr(args, "template_map", None))
+    template_map = load_template_map(args.template_map)
 
     existing = find_project_by_name(base, auth, topo["name"])
     if existing:
@@ -129,10 +141,9 @@ def cmd_deploy(args):
 
     nodes = {}
     for node_name, node_def in topo["nodes"].items():
-        template_name = node_def["template"]
-        resolved_name = resolve_template_name(template_name, template_map, template_ids)
-        if resolved_name != template_name:
-            print(f"{node_name}: template '{template_name}' -> '{resolved_name}'")
+        role_name = node_def["template"]
+        resolved_name = resolve_template_name(role_name, template_map, template_ids)
+        print(f"{node_name}: template '{role_name}' -> '{resolved_name}'")
 
         payload = {
             "name": node_name,
@@ -179,7 +190,7 @@ def cmd_deploy(args):
     if has_configs:
         if args.no_start:
             print("\n--no-start が指定されたため設定投入をスキップしました")
-        elif getattr(args, "no_config", False):
+        elif args.no_config:
             print("\n--no-config が指定されたため設定投入をスキップしました")
         else:
             push_configs(base, nodes, topo)
@@ -208,14 +219,15 @@ def cmd_configure(args):
 
 def cmd_destroy(args):
     base, auth = load_config(args.config)
+    target = resolve_project_target(args.name)
 
-    project = find_project_by_name(base, auth, args.name)
+    project = find_project_by_name(base, auth, target)
     if project is None:
-        res = requests.get(f"{base}/projects/{args.name}", auth=auth)
+        res = requests.get(f"{base}/projects/{target}", auth=auth)
         if res.status_code == 200:
             project = res.json()
         else:
-            raise SystemExit(f"プロジェクト '{args.name}' が見つかりません")
+            raise SystemExit(f"プロジェクト '{target}' が見つかりません")
 
     project_id = project["project_id"]
 
@@ -304,7 +316,7 @@ def main():
     p_deploy.add_argument(
         "-m",
         "--template-map",
-        help="テンプレート対応表のパス (省略時はカレントディレクトリの gns3lab_templates.yml。無くても動作する)",
+        help="テンプレート対応表のパス (省略時はカレントディレクトリの gns3lab_templates.yml)",
     )
     p_deploy.set_defaults(func=cmd_deploy)
 
@@ -315,7 +327,9 @@ def main():
     p_configure.set_defaults(func=cmd_configure)
 
     p_destroy = sub.add_parser("destroy", help="プロジェクトを停止・削除する")
-    p_destroy.add_argument("name", help="プロジェクト名 または project_id")
+    p_destroy.add_argument(
+        "name", help="プロジェクト名 / project_id / topology.yml のパス(name: を使用)"
+    )
     p_destroy.set_defaults(func=cmd_destroy)
 
     p_list = sub.add_parser("list", help="既存プロジェクト一覧を表示する")

@@ -93,12 +93,12 @@ nodes:
        network 172.31.0.0 0.0.0.3 area 0
 
   SW-A:
-    template: Ethernet switch
+    template: switch
     x: -450
     y: 0
 
   PC-A:
-    template: VPCS
+    template: vpcs
     x: -600
     y: 0
     config: |
@@ -131,7 +131,7 @@ nodes:
 
   # --- インターネット(VPN対向用の共有セグメント) ---
   INET_Core:
-    template: Ethernet switch
+    template: switch
     x: 0
     y: 150
 
@@ -180,12 +180,12 @@ nodes:
        network 172.31.0.0 0.0.0.3 area 0
 
   SW-B:
-    template: Ethernet switch
+    template: switch
     x: 450
     y: 0
 
   PC-B:
-    template: VPCS
+    template: vpcs
     x: 600
     y: 0
     config: |

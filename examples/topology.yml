@@ -37,7 +37,7 @@ name: mpls_lab3
 
 nodes:
   PC1:
-    template: VPCS
+    template: vpcs
     x: -300
     y: 150
     config: |
@@ -173,7 +173,7 @@ nodes:
       ip route 0.0.0.0 0.0.0.0 10.1.4.1
 
   PC2:
-    template: VPCS
+    template: vpcs
     x: 300
     y: 150
     config: |

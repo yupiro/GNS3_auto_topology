@@ -64,7 +64,7 @@ name: financial_wan_lab
 nodes:
   # --- WAN ---
   WAN_Core:
-    template: Ethernet switch
+    template: switch
     x: 0
     y: -50
 
@@ -86,12 +86,12 @@ nodes:
        network 10.3.1.0 0.0.0.255 area 0
 
   SW-HQ:
-    template: Ethernet switch
+    template: switch
     x: 0
     y: -450
 
   HQ-PC1:
-    template: VPCS
+    template: vpcs
     x: -100
     y: -600
     config: |
@@ -99,7 +99,7 @@ nodes:
       save
 
   HQ-PC2:
-    template: VPCS
+    template: vpcs
     x: 100
     y: -600
     config: |
@@ -133,17 +133,17 @@ nodes:
        network 10.1.4.0 0.0.0.3 area 0
 
   SW-TYO-CORE:
-    template: Ethernet switch
+    template: switch
     x: -500
     y: 300
 
   SW-TYO-TRADE:
-    template: Ethernet switch
+    template: switch
     x: -350
     y: 300
 
   CoreBank-TYO:
-    template: VPCS
+    template: vpcs
     x: -500
     y: 450
     config: |
@@ -151,7 +151,7 @@ nodes:
       save
 
   Trade-TYO:
-    template: VPCS
+    template: vpcs
     x: -350
     y: 450
     config: |
@@ -199,12 +199,12 @@ nodes:
       service-policy global_policy global
 
   SW-TYO-DMZ:
-    template: Ethernet switch
+    template: switch
     x: -150
     y: 450
 
   DMZ-TYO:
-    template: VPCS
+    template: vpcs
     x: -150
     y: 600
     config: |
@@ -212,7 +212,7 @@ nodes:
       save
 
   Internet:
-    template: NAT
+    template: nat
     x: 0
     y: 300
 
@@ -238,17 +238,17 @@ nodes:
        network 10.2.2.0 0.0.0.255 area 0
 
   SW-OSA-CORE:
-    template: Ethernet switch
+    template: switch
     x: 250
     y: 300
 
   SW-OSA-TRADE:
-    template: Ethernet switch
+    template: switch
     x: 450
     y: 300
 
   CoreBank-OSA:
-    template: VPCS
+    template: vpcs
     x: 250
     y: 450
     config: |
@@ -256,7 +256,7 @@ nodes:
       save
 
   Trade-OSA:
-    template: VPCS
+    template: vpcs
     x: 450
     y: 450
     config: |
