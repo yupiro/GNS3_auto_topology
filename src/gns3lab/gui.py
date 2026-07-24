@@ -82,10 +82,7 @@ class App:
         notebook.pack(fill="x", padx=8, pady=4)
 
         self._build_topology_tab(notebook)
-        self._build_deploy_tab(notebook)
-        self._build_destroy_tab(notebook)
-        self._build_list_tab(notebook)
-        self._build_status_tab(notebook)
+        self._build_project_tab(notebook)
         self._build_templates_tab(notebook)
         self._build_template_map_tab(notebook)
 
@@ -104,13 +101,13 @@ class App:
 
     def _build_topology_tab(self, notebook):
         frame = ttk.Frame(notebook, padding=10)
-        notebook.add(frame, text="トポロジ編集")
+        notebook.add(frame, text="トポロジ編集 / Deploy")
 
         path_row = ttk.Frame(frame)
         path_row.grid(row=0, column=0, columnspan=2, sticky="ew", pady=(0, 6))
         ttk.Label(path_row, text="ファイル:").pack(side="left")
-        self.topo_edit_path_var = tk.StringVar(value=str(Path.cwd() / "topology.yml"))
-        ttk.Entry(path_row, textvariable=self.topo_edit_path_var).pack(
+        self.topology_var = tk.StringVar(value=str(Path.cwd() / "topology.yml"))
+        ttk.Entry(path_row, textvariable=self.topology_var).pack(
             side="left", padx=4, fill="x", expand=True
         )
         ttk.Button(path_row, text="開く...", command=self.open_topology_editor).pack(side="left")
@@ -136,12 +133,44 @@ class App:
             highlightthickness=1,
             highlightbackground="#c7cfdb",
             width=480,
-            height=420,
+            height=320,
         )
         self.topo_canvas.pack(fill="both", expand=True)
         self.topo_canvas.bind("<Configure>", self._schedule_topology_redraw)
         self.topo_status = ttk.Label(canvas_frame, text="")
         self.topo_status.pack(anchor="w", pady=(4, 0))
+
+        deploy_box = ttk.LabelFrame(frame, text="Deploy", padding=8)
+        deploy_box.grid(row=2, column=0, columnspan=2, sticky="ew", pady=(8, 0))
+        deploy_box.columnconfigure(1, weight=1)
+
+        ttk.Label(deploy_box, text="テンプレート対応表:").grid(row=0, column=0, sticky="w")
+        self.template_map_var = tk.StringVar(
+            value=str(Path.cwd() / "gns3lab_templates.yml")
+        )
+        ttk.Entry(deploy_box, textvariable=self.template_map_var).grid(
+            row=0, column=1, sticky="ew", padx=4
+        )
+        ttk.Button(deploy_box, text="参照...", command=self.browse_template_map).grid(
+            row=0, column=2
+        )
+
+        self.no_start_var = tk.BooleanVar(value=False)
+        ttk.Checkbutton(
+            deploy_box, text="起動しない (--no-start)", variable=self.no_start_var
+        ).grid(row=1, column=0, columnspan=2, sticky="w", pady=(6, 0))
+
+        self.no_config_var = tk.BooleanVar(value=False)
+        ttk.Checkbutton(
+            deploy_box, text="設定を投入しない (--no-config)", variable=self.no_config_var
+        ).grid(row=2, column=0, columnspan=2, sticky="w")
+
+        ttk.Button(deploy_box, text="Deploy 実行", command=self.run_deploy).grid(
+            row=3, column=0, sticky="w", pady=(6, 0)
+        )
+        ttk.Button(
+            deploy_box, text="設定を再投入 (configure)", command=self.run_configure
+        ).grid(row=3, column=1, sticky="w", pady=(6, 0))
 
         frame.columnconfigure(0, weight=1)
         frame.columnconfigure(1, weight=1)
@@ -149,102 +178,26 @@ class App:
 
         self._load_topology_into_editor(initial=True)
 
-    def _build_deploy_tab(self, notebook):
+    def _build_project_tab(self, notebook):
         frame = ttk.Frame(notebook, padding=10)
-        notebook.add(frame, text="deploy")
-
-        ttk.Label(frame, text="トポロジファイル:").grid(row=0, column=0, sticky="w")
-        self.topology_var = tk.StringVar(value=str(Path.cwd() / "topology.yml"))
-        ttk.Entry(frame, textvariable=self.topology_var).grid(
-            row=0, column=1, sticky="ew", padx=4
-        )
-        ttk.Button(frame, text="参照...", command=self.browse_topology).grid(row=0, column=2)
-
-        ttk.Label(frame, text="テンプレート対応表 (任意):").grid(row=1, column=0, sticky="w")
-        self.template_map_var = tk.StringVar(
-            value=str(Path.cwd() / "gns3lab_templates.yml")
-        )
-        ttk.Entry(frame, textvariable=self.template_map_var).grid(
-            row=1, column=1, sticky="ew", padx=4
-        )
-        ttk.Button(frame, text="参照...", command=self.browse_template_map).grid(
-            row=1, column=2
-        )
-
-        self.no_start_var = tk.BooleanVar(value=False)
-        ttk.Checkbutton(
-            frame, text="起動しない (--no-start)", variable=self.no_start_var
-        ).grid(row=2, column=1, sticky="w", pady=(6, 0))
-
-        self.no_config_var = tk.BooleanVar(value=False)
-        ttk.Checkbutton(
-            frame, text="設定を投入しない (--no-config)", variable=self.no_config_var
-        ).grid(row=3, column=1, sticky="w", pady=(0, 6))
-
-        ttk.Button(frame, text="Deploy 実行", command=self.run_deploy).grid(
-            row=4, column=1, sticky="w", pady=6
-        )
-        ttk.Button(
-            frame, text="設定を再投入 (configure)", command=self.run_configure
-        ).grid(row=4, column=2, sticky="w", pady=6, padx=(6, 0))
-        frame.columnconfigure(1, weight=1)
-
-    def _build_destroy_tab(self, notebook):
-        frame = ttk.Frame(notebook, padding=10)
-        notebook.add(frame, text="destroy")
-
-        ttk.Label(frame, text="プロジェクト名 / project_id:").grid(row=0, column=0, sticky="w")
-        self.destroy_name_var = tk.StringVar()
-        self.destroy_combo = ttk.Combobox(frame, textvariable=self.destroy_name_var)
-        self.destroy_combo.grid(row=0, column=1, sticky="ew", padx=4)
-        ttk.Button(
-            frame, text="一覧を更新", command=self.refresh_destroy_choices
-        ).grid(row=0, column=2)
-
-        ttk.Label(
-            frame, text="または、トポロジファイルを指定 (name: を自動使用):"
-        ).grid(row=1, column=0, columnspan=2, sticky="w", pady=(6, 0))
-        ttk.Button(
-            frame, text="トポロジファイルから選択...", command=self.browse_destroy_topology
-        ).grid(row=2, column=1, sticky="w")
-
-        ttk.Button(frame, text="Destroy 実行", command=self.run_destroy).grid(
-            row=3, column=1, sticky="w", pady=6
-        )
-        frame.columnconfigure(1, weight=1)
-
-    def _build_list_tab(self, notebook):
-        frame = ttk.Frame(notebook, padding=10)
-        notebook.add(frame, text="list")
+        notebook.add(frame, text="プロジェクト管理")
 
         btn_row = ttk.Frame(frame)
         btn_row.pack(fill="x")
-        ttk.Button(btn_row, text="List 更新", command=self.refresh_list_tree).pack(side="left")
+        ttk.Button(btn_row, text="一覧を更新", command=self.refresh_list_tree).pack(side="left")
+        ttk.Button(
+            btn_row, text="選択したプロジェクトの状態を表示", command=self.show_selected_status
+        ).pack(side="left", padx=(6, 0))
         ttk.Button(
             btn_row, text="選択したプロジェクトを削除", command=self.destroy_selected_from_list
         ).pack(side="left", padx=(6, 0))
 
         columns = ("name", "status", "project_id")
-        self.list_tree = ttk.Treeview(frame, columns=columns, show="headings", height=12)
+        self.list_tree = ttk.Treeview(frame, columns=columns, show="headings", height=14)
         for col, width in (("name", 220), ("status", 90), ("project_id", 280)):
             self.list_tree.heading(col, text=col)
             self.list_tree.column(col, width=width, anchor="w")
         self.list_tree.pack(fill="both", expand=True, pady=(6, 0))
-
-    def _build_status_tab(self, notebook):
-        frame = ttk.Frame(notebook, padding=10)
-        notebook.add(frame, text="status")
-
-        ttk.Label(frame, text="プロジェクト名 / project_id:").grid(row=0, column=0, sticky="w")
-        self.status_name_var = tk.StringVar()
-        ttk.Entry(frame, textvariable=self.status_name_var).grid(
-            row=0, column=1, sticky="ew", padx=4
-        )
-
-        ttk.Button(frame, text="Status 実行", command=self.run_status).grid(
-            row=1, column=1, sticky="w", pady=6
-        )
-        frame.columnconfigure(1, weight=1)
 
     def _build_templates_tab(self, notebook):
         frame = ttk.Frame(notebook, padding=10)
@@ -320,13 +273,6 @@ class App:
         if path:
             self.config_var.set(path)
 
-    def browse_topology(self):
-        path = filedialog.askopenfilename(
-            title="トポロジファイルを選択", filetypes=[("YAML", "*.yml *.yaml"), ("All", "*.*")]
-        )
-        if path:
-            self.topology_var.set(path)
-
     def browse_template_map(self):
         path = filedialog.askopenfilename(
             title="テンプレート対応表ファイルを選択",
@@ -334,24 +280,6 @@ class App:
         )
         if path:
             self.template_map_var.set(path)
-
-    def browse_destroy_topology(self):
-        path = filedialog.askopenfilename(
-            title="トポロジファイルを選択", filetypes=[("YAML", "*.yml *.yaml"), ("All", "*.*")]
-        )
-        if not path:
-            return
-        try:
-            with open(path, encoding="utf-8") as f:
-                topo = yaml.safe_load(f) or {}
-        except (OSError, yaml.YAMLError) as e:
-            self.queue.put(f"\n[エラー] トポロジファイルの読み込みに失敗しました: {e}\n")
-            return
-        name = topo.get("name")
-        if not name:
-            self.queue.put(f"\n[エラー] {path} に name がありません\n")
-            return
-        self.destroy_name_var.set(name)
 
     # --- テンプレート対応 (役割名 -> 実テンプレート名) ---
 
@@ -513,11 +441,11 @@ class App:
             title="トポロジファイルを選択", filetypes=[("YAML", "*.yml *.yaml"), ("All", "*.*")]
         )
         if path:
-            self.topo_edit_path_var.set(path)
+            self.topology_var.set(path)
             self._load_topology_into_editor()
 
     def _load_topology_into_editor(self, initial=False):
-        path = Path(self.topo_edit_path_var.get())
+        path = Path(self.topology_var.get())
         if path.is_file():
             try:
                 text = path.read_text(encoding="utf-8")
@@ -532,7 +460,7 @@ class App:
         self._redraw_topology()
 
     def save_topology_editor(self):
-        path_str = self.topo_edit_path_var.get()
+        path_str = self.topology_var.get()
         if not path_str:
             return
         path = Path(path_str)
@@ -701,21 +629,6 @@ class App:
         )
         self._run_in_thread(cmd_configure, args)
 
-    def run_destroy(self):
-        args = SimpleNamespace(
-            config=self.config_var.get() or None, name=self.destroy_name_var.get()
-        )
-        self._run_in_thread(cmd_destroy, args, on_done=self.refresh_destroy_choices)
-
-    def refresh_destroy_choices(self):
-        self._fetch_projects_async(
-            lambda projects: self._set_destroy_choices([p["name"] for p in projects])
-        )
-
-    def _set_destroy_choices(self, names):
-        self.destroy_combo["values"] = names
-        self.queue.put(f"\nプロジェクト一覧を更新しました ({len(names)}件)\n")
-
     def refresh_list_tree(self):
         self._fetch_projects_async(self._set_list_tree)
 
@@ -740,10 +653,13 @@ class App:
         args = SimpleNamespace(config=self.config_var.get() or None, name=name)
         self._run_in_thread(cmd_destroy, args, on_done=self.refresh_list_tree)
 
-    def run_status(self):
-        args = SimpleNamespace(
-            config=self.config_var.get() or None, name=self.status_name_var.get()
-        )
+    def show_selected_status(self):
+        selected = self.list_tree.selection()
+        if not selected:
+            messagebox.showinfo("Status", "状態を表示するプロジェクトを選択してください。")
+            return
+        name = self.list_tree.item(selected[0], "values")[0]
+        args = SimpleNamespace(config=self.config_var.get() or None, name=name)
         self._run_in_thread(cmd_status, args)
 
     def run_templates(self):
