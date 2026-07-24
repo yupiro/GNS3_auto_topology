@@ -161,6 +161,7 @@ templates:
   - 設計書: [基本設計書](docs/wan-redundancy-basic-design.md) / [詳細設計書](docs/wan-redundancy-detailed-design.md)
 - `examples/nat_topology.yml`: 内部LAN(PC1/PC2/SVR1) - NATルーター(R1) - 外部ホスト(EXT-PC) による
   動的PAT(overload)と静的NATの検証トポロジー
+  - 設計書: [基本設計書](docs/nat-basic-design.md) / [詳細設計書](docs/nat-detailed-design.md)
 
 ### 2b. ノードに初期設定を持たせる（config自動投入）
 
