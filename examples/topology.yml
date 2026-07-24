@@ -6,14 +6,14 @@
 #   P1      : プロバイダコア (OSPF + LDP のみ、VRFは持たない)
 #   PC1/PC2 : 疎通確認用エンドホスト (VPCS)
 #
-# 全機種 c3725 はオンボード2ポート (FastEthernet0/0, 0/1) のみを使用。
-# 各ノードの config: ブロックは `gns3lab deploy` 実行時に自動でコンソールへ投入される
-# (--no-start / --no-config を付けるとスキップされる)。
+# CE1/PE1/P1/PE2/CE2はQEMU系Cisco IOSv(GigabitEthernet、4アダプタ)を使用し、
+# Gi0/0/Gi0/1の2ポートのみ使用。IOSvはQEMU系ノードのため、各ルータへの設定は
+# `gns3lab deploy` のCLI自動投入(dynamips/IOU/VPCSのみ対応)は非対応。GNS3の
+# コンソールから手動で投入してください(このファイルの各ノードの config: の内容を
+# そのまま貼り付け)。PC1/PC2(VPCS)は自動投入されます。
 #
-# template: は実テンプレート名 "c3725" ではなく役割名 "ios-router" を指定している。
-# gns3lab_templates.yml (無ければ gns3lab_templates.yml.example をコピー) で
-# ios-router -> 実際のテンプレート名 の対応を環境ごとに設定すれば、このファイルを
-# 直接編集せずに別のGNS3サーバーへそのままデプロイできる。
+# template: は実テンプレート名の代わりに役割名 "iosv-router" を指定している。
+# gns3lab_templates.yml で環境ごとの実テンプレート名に対応付けること。
 #
 # --- IPアドレス計画 ---
 #   PC1-CE1  : 192.168.1.0/24  (CE1=.1, PC1=.10)
@@ -26,6 +26,8 @@
 #   BGP AS   : 65000 (PE1-PE2間 iBGP, VRF CUST_A: rd/rt = 65000:1)
 #
 # --- 検証手順の例 (デプロイ後) ---
+#   0. 各ルータはconfig自動投入非対応のため、GNS3コンソールから各ノードのconfig:を
+#      手動投入してから以下を実施すること
 #   1. show mpls ldp neighbor  (PE1/P1/PE2 で LDP隣接が張れているか)
 #   2. show ip route vrf CUST_A  (PE1/PE2 でCUST_A内のCE側経路が見えるか)
 #   3. show bgp vpnv4 unicast vrf CUST_A  (PE1-PE2間でVPNv4経路が交換されているか)
@@ -45,21 +47,21 @@ nodes:
       save
 
   CE1:
-    template: ios-router
+    template: iosv-router
     x: -300
     y: 0
     config: |
       hostname CE1
-      interface FastEthernet0/0
+      interface GigabitEthernet0/0
        ip address 192.168.1.1 255.255.255.0
        no shutdown
-      interface FastEthernet0/1
+      interface GigabitEthernet0/1
        ip address 10.1.1.1 255.255.255.252
        no shutdown
       ip route 0.0.0.0 0.0.0.0 10.1.1.2
 
   PE1:
-    template: ios-router
+    template: iosv-router
     x: -150
     y: 0
     config: |
@@ -71,11 +73,11 @@ nodes:
        route-target import 65000:1
       interface Loopback0
        ip address 1.1.1.1 255.255.255.255
-      interface FastEthernet0/0
+      interface GigabitEthernet0/0
        ip vrf forwarding CUST_A
        ip address 10.1.1.2 255.255.255.252
        no shutdown
-      interface FastEthernet0/1
+      interface GigabitEthernet0/1
        ip address 10.1.2.1 255.255.255.252
        mpls ip
        no shutdown
@@ -97,7 +99,7 @@ nodes:
        exit-address-family
 
   P1:
-    template: ios-router
+    template: iosv-router
     x: 0
     y: 0
     config: |
@@ -105,11 +107,11 @@ nodes:
       ip cef
       interface Loopback0
        ip address 2.2.2.2 255.255.255.255
-      interface FastEthernet0/0
+      interface GigabitEthernet0/0
        ip address 10.1.2.2 255.255.255.252
        mpls ip
        no shutdown
-      interface FastEthernet0/1
+      interface GigabitEthernet0/1
        ip address 10.1.3.1 255.255.255.252
        mpls ip
        no shutdown
@@ -121,7 +123,7 @@ nodes:
       mpls ldp router-id Loopback0 force
 
   PE2:
-    template: ios-router
+    template: iosv-router
     x: 150
     y: 0
     config: |
@@ -133,11 +135,11 @@ nodes:
        route-target import 65000:1
       interface Loopback0
        ip address 3.3.3.3 255.255.255.255
-      interface FastEthernet0/0
+      interface GigabitEthernet0/0
        ip address 10.1.3.2 255.255.255.252
        mpls ip
        no shutdown
-      interface FastEthernet0/1
+      interface GigabitEthernet0/1
        ip vrf forwarding CUST_A
        ip address 10.1.4.1 255.255.255.252
        no shutdown
@@ -159,15 +161,15 @@ nodes:
        exit-address-family
 
   CE2:
-    template: ios-router
+    template: iosv-router
     x: 300
     y: 0
     config: |
       hostname CE2
-      interface FastEthernet0/0
+      interface GigabitEthernet0/0
        ip address 10.1.4.2 255.255.255.252
        no shutdown
-      interface FastEthernet0/1
+      interface GigabitEthernet0/1
        ip address 192.168.2.1 255.255.255.0
        no shutdown
       ip route 0.0.0.0 0.0.0.0 10.1.4.1
@@ -182,8 +184,8 @@ nodes:
 
 links:
   - [PC1:0/0, CE1:0/0]
-  - [CE1:0/1, PE1:0/0]
-  - [PE1:0/1, P1:0/0]
-  - [P1:0/1, PE2:0/0]
-  - [PE2:0/1, CE2:0/0]
-  - [CE2:0/1, PC2:0/0]
+  - [CE1:1/0, PE1:0/0]
+  - [PE1:1/0, P1:0/0]
+  - [P1:1/0, PE2:0/0]
+  - [PE2:1/0, CE2:0/0]
+  - [CE2:1/0, PC2:0/0]

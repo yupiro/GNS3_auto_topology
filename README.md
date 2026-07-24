@@ -103,6 +103,16 @@ gns3lab templates
 `name` 列の値を `gns3lab_templates.yml` の対応表（役割名 → 実テンプレート名）に登録します。
 GUIなら「テンプレート対応」タブで、ドロップダウンから選んで登録できます。
 
+`ports` 列には、そのテンプレートが持つアダプタ/ポート構成を表示します（`links:` に書く
+`ノード名:adapter/port` の目安）。
+
+- VPCS: `1adapter (0/0固定)`
+- Ethernet switch / hub: `8ports (0/0-7/0)` のようにポート数と範囲
+- QEMU/Docker/IOU系（IOSv、ASAvなど）: `4adapters (0/0-3/0)` のようにアダプタ数と範囲
+- Dynamips系（c3725など）: `slot0=GT96100-FE, slot1=NM-4E` のようなスロット構成
+  （スロットに挿さっているカード種別によってポート数が変わるため、具体的な本数までは
+  算出していません。カード名から判断してください）
+
 ### 2. トポロジをYAMLで定義する
 
 `examples/topology.yml` を参考に、好きな構成のファイルを作成します。

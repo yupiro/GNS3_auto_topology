@@ -290,14 +290,41 @@ def cmd_status(args):
         print("  " + " -- ".join(endpoints))
 
 
+def describe_template_ports(t):
+    """テンプレートのアダプタ/ポート構成を、linksに書く adapter/port の目安として表示する。"""
+    node_type = t.get("node_type")
+
+    if node_type in ("ethernet_switch", "ethernet_hub"):
+        ports = t.get("ports_mapping") or []
+        if not ports:
+            return "-"
+        return f"{len(ports)}ports (0/0-{len(ports) - 1}/0)"
+
+    if node_type == "vpcs":
+        return "1adapter (0/0固定)"
+
+    if node_type == "dynamips":
+        slots = [f"slot{i}={t[f'slot{i}']}" for i in range(7) if t.get(f"slot{i}")]
+        return ", ".join(slots) if slots else "-"
+
+    adapters = t.get("adapters")
+    if adapters is not None:
+        return f"{adapters}adapters (0/0-{adapters - 1}/0)"
+
+    return "-"
+
+
 def cmd_templates(args):
     base, auth = load_config(args.config)
     templates = list_templates(base, auth)
 
-    print(f"\n{'name':<30} {'category':<12} template_id")
-    print("-" * 80)
+    print(f"\n{'name':<30} {'category':<12} {'ports':<28} template_id")
+    print("-" * 100)
     for t in sorted(templates, key=lambda t: t.get("name", "")):
-        print(f"{t.get('name', ''):<30} {t.get('category', ''):<12} {t.get('template_id', '')}")
+        print(
+            f"{t.get('name', ''):<30} {t.get('category', ''):<12} "
+            f"{describe_template_ports(t):<28} {t.get('template_id', '')}"
+        )
 
 
 def main():

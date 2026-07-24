@@ -4,32 +4,34 @@
 #   PC1/PC2 : 内部LANの一般クライアント (VPCS)
 #   SVR1    : 内部LANの公開サーバー役 (VPCS、静的NATで外部から到達可能にする)
 #   SW-IN   : 内部LANスイッチ (config投入なし)
-#   R1      : NATルーター (c3725。inside/outside両インターフェースでNATを実施)
+#   R1      : NATルーター (Cisco IOSv。inside/outside両インターフェースでNATを実施)
 #   EXT-PC  : インターネット上のホストを模したノード (VPCS)
 #
-# 全機種 c3725 はオンボード2ポート (FastEthernet0/0, 0/1) のみを使用。
-# 各ノードの config: ブロックは `gns3lab deploy` 実行時に自動でコンソールへ投入される
-# (--no-start / --no-config を付けるとスキップされる)。
+# R1はQEMU系Cisco IOSv(GigabitEthernet、4アダプタ)を使用し、Gi0/0/Gi0/1の2ポートのみ使用。
+# IOSvはQEMU系ノードのため、R1への設定は `gns3lab deploy` のCLI自動投入(dynamips/IOU/VPCS
+# のみ対応)は非対応。GNS3のコンソールから手動で投入してください(このファイルのR1の
+# config: の内容をそのまま貼り付け)。PC1/PC2/SVR1/EXT-PC(VPCS)は自動投入されます。
 #
-# template: は実テンプレート名 "c3725" ではなく役割名 "ios-router" を指定している。
-# gns3lab_templates.yml で ios-router -> 実際のテンプレート名 の対応を環境ごとに
-# 設定すれば、このファイルを直接編集せずに別のGNS3サーバーへそのままデプロイできる。
+# template: は実テンプレート名の代わりに役割名 "iosv-router" を指定している。
+# gns3lab_templates.yml で環境ごとの実テンプレート名に対応付けること。
 #
 # --- IPアドレス計画 ---
 #   内部(inside) : 192.168.1.0/24
-#     R1 Fa0/0=.1, PC1=.10, PC2=.11, SVR1=.100
+#     R1 Gi0/0=.1, PC1=.10, PC2=.11, SVR1=.100
 #   外部(outside): 203.0.113.0/24  (RFC5737 検証用アドレス)
-#     R1 Fa0/1=.1, EXT-PC=.10
+#     R1 Gi0/1=.1, EXT-PC=.10
 #     SVR1の静的NAT公開アドレス = 203.0.113.100
 #
 #   NAT方式:
-#     - PC1/PC2 => 動的PAT (ip nat inside source list 1 interface FastEthernet0/1 overload)
+#     - PC1/PC2 => 動的PAT (ip nat inside source list 1 interface GigabitEthernet0/1 overload)
 #       内部192.168.1.0/24全体がoverload対象だが、SVR1(.100)は下記の静的NATが
 #       優先されるためPC1/PC2のみが実質的にPATで203.0.113.1を共有する。
 #     - SVR1   => 静的NAT (ip nat inside source static 192.168.1.100 203.0.113.100)
 #       外部から203.0.113.100宛のアクセスがSVR1(192.168.1.100)へ変換される。
 #
 # --- 検証手順の例 (デプロイ後) ---
+#   0. R1はconfig自動投入非対応のため、GNS3コンソールからR1のconfig:を手動投入してから
+#      以下を実施すること
 #   1. PC1 -> ping 203.0.113.10 (EXT-PC) が通ることを確認
 #   2. PC2 -> ping 203.0.113.10 も通ることを確認したうえで、
 #      R1で `show ip nat translations` を実行し、PC1/PC2それぞれの内部アドレスが
@@ -78,21 +80,21 @@ nodes:
     y: 50
 
   R1:
-    template: ios-router
+    template: iosv-router
     x: -150
     y: -100
     config: |
       hostname R1
-      interface FastEthernet0/0
+      interface GigabitEthernet0/0
        ip address 192.168.1.1 255.255.255.0
        ip nat inside
        no shutdown
-      interface FastEthernet0/1
+      interface GigabitEthernet0/1
        ip address 203.0.113.1 255.255.255.0
        ip nat outside
        no shutdown
       access-list 1 permit 192.168.1.0 0.0.0.255
-      ip nat inside source list 1 interface FastEthernet0/1 overload
+      ip nat inside source list 1 interface GigabitEthernet0/1 overload
       ip nat inside source static 192.168.1.100 203.0.113.100
 
   EXT-PC:
@@ -108,4 +110,4 @@ links:
   - [PC2:0/0, SW-IN:0/1]
   - [SVR1:0/0, SW-IN:0/2]
   - [SW-IN:0/3, R1:0/0]
-  - [R1:0/1, EXT-PC:0/0]
+  - [R1:1/0, EXT-PC:0/0]
