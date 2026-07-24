@@ -1,7 +1,9 @@
 import argparse
 import re
 import sys
+import unicodedata
 from pathlib import Path
+from xml.sax.saxutils import escape
 
 import requests
 import yaml
@@ -36,6 +38,7 @@ def load_topology(path):
         raise SystemExit("topology.yml に nodes がありません")
 
     topo.setdefault("links", [])
+    topo.setdefault("notes", [])
     return topo
 
 
@@ -120,6 +123,63 @@ def resolve_template_name(role_name, template_map, template_ids):
     return resolved_name
 
 
+def _text_width(line, font_size):
+    """CJK文字は全角(font_size相当)、それ以外は半角(0.6倍)としておおよその幅を見積もる。"""
+    width = 0.0
+    for ch in line:
+        if unicodedata.east_asian_width(ch) in ("W", "F"):
+            width += font_size
+        else:
+            width += font_size * 0.6
+    return width
+
+
+def build_text_drawing_svg(
+    text, font_size=10, font_family="Meiryo, MS Gothic, sans-serif", color="#000000"
+):
+    """複数行テキストを、GNS3のdrawing(SVG)としてキャンバスに配置できる形式に変換する。
+
+    GNS3デフォルトの "TypeWriter" フォントは日本語グリフを持たないため、
+    Windows標準の日本語対応フォントを明示的に指定する。
+    また、GNS3デスクトップクライアントは複数行テキストを <tspan> ではなく、
+    1つの <text> 要素内にリテラルな改行文字(\\n)を埋め込む形式で扱う
+    (<tspan dy=...> 方式だと、クライアント側で再保存された際に行区切りが
+    失われて文字が連結されてしまうことを実機で確認した)。
+    """
+    lines = text.splitlines() or [""]
+    line_height = font_size * 1.4
+    width = max((_text_width(line, font_size) for line in lines), default=0) + 16
+    height = len(lines) * line_height + 10
+
+    content = escape("\n".join(lines))
+    return (
+        f'<svg width="{width:.0f}" height="{height:.0f}">'
+        f'<text fill="{color}" fill-opacity="1.0" font-family="{font_family}" '
+        f'font-size="{font_size}">{content}</text></svg>'
+    )
+
+
+def create_drawings(base, auth, project_id, topo):
+    notes = topo.get("notes") or []
+    if not notes:
+        return
+
+    print("\n--- 注釈(notes)配置 ---")
+    for i, note in enumerate(notes):
+        text = note.get("text", "")
+        if not text:
+            continue
+        payload = {
+            "x": note.get("x", 0),
+            "y": note.get("y", 0),
+            "z": note.get("z", 1),
+            "rotation": 0,
+            "svg": build_text_drawing_svg(text),
+        }
+        res = requests.post(f"{base}/projects/{project_id}/drawings", json=payload, auth=auth)
+        check_response(res, f"create drawing #{i}")
+
+
 def cmd_deploy(args):
     base, auth = load_config(args.config)
     topo = load_topology(args.topology)
@@ -177,6 +237,8 @@ def cmd_deploy(args):
         }
         res = requests.post(f"{base}/projects/{project_id}/links", json=payload, auth=auth)
         check_response(res, f"create link {link[0]} - {link[1]}")
+
+    create_drawings(base, auth, project_id, topo)
 
     if not args.no_start:
         for node_name, node in nodes.items():

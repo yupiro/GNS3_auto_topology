@@ -111,3 +111,51 @@ links:
   - [SVR1:0/0, SW-IN:0/2]
   - [SW-IN:0/3, R1:0/0]
   - [R1:1/0, EXT-PC:0/0]
+
+# notes: はGNS3のキャンバス上にテキスト注釈(drawing)として配置される(deploy時のみ反映)。
+# 詳細は docs/nat-basic-design.md / docs/nat-detailed-design.md を参照。
+notes:
+  - x: -620
+    y: -440
+    text: |
+      NATラボ: nat_lab
+      inside : 192.168.1.0/24
+      outside: 203.0.113.0/24
+      (outsideはRFC5737検証用)
+
+  - x: -300
+    y: -440
+    text: |
+      IPアドレス一覧
+      PC1    : 192.168.1.10
+      PC2    : 192.168.1.11
+      SVR1   : 192.168.1.100
+      R1 Gi0/0 (inside) : 192.168.1.1
+      R1 Gi0/1 (outside): 203.0.113.1
+      EXT-PC : 203.0.113.10
+      SVR1の静的NAT公開先: 203.0.113.100
+
+  - x: -620
+    y: -260
+    text: |
+      NAT方式
+      PC1/PC2:
+        動的PAT(overload)
+        -> 203.0.113.1を共有
+      SVR1:
+        静的NAT(1:1)
+        -> 203.0.113.100
+      (静的NATが動的PATより優先)
+
+  - x: -300
+    y: -260
+    text: |
+      検証手順
+      1. PC1/PC2 -> EXT-PC
+         (203.0.113.10) へping
+      2. EXT-PC -> SVR1公開先
+         (203.0.113.100) へping
+      3. EXT-PC -> PC1直接
+         (192.168.1.10) は失敗すること
+      4. R1で show ip nat
+         translations / statistics
