@@ -19,6 +19,21 @@
 #   送ると宛先が203.0.113.50に変換されてEXT-SVRに届き、戻りの応答も192.168.1.50に
 #   変換されてPC1に返る。
 #
+# --- no-alias add-route が必要な理由 ---
+#   outside-local(192.168.1.50)はinside側サブネット(192.168.1.0/24)に含まれるアドレスの
+#   ため、`ip nat outside source static` は既定では inside インターフェース上に
+#   192.168.1.50 宛のARPエイリアス(ルータ自身が代理応答する動作)を暗黙的に作成しようと
+#   する。この暗黙のエイリアス動作は状況によって作成されない/効かないことがあるため
+#   (「ルータが既に応答している場合もある」という前提に依存させない)、明示的に
+#   以下のいずれかを行い、実際にパケットが流れることを保証する運用が推奨される。
+#     ① no-alias add-route を付与する(本トポロジーで採用。ARPエイリアスを無効化しつつ、
+#        outside-local宛の経路を自動的に追加させる、最も簡潔な方法)
+#     ② no-alias を付与し、`ip route <outside-local> 255.255.255.255 <outside-global>`
+#        (next-hopをoutside側の実アドレスにした経路)を別途手動で追加する
+#     ③ インターフェースのみを指定した `ip route ... <interface>` はP2Pリンクでのみ有効。
+#        GigabitEthernet(マルチアクセス媒体)では next-hopアドレスの指定が必須のため
+#        使用しない(static_nat_outside_hostroute_topology.ymlで詳説)
+#
 # R1はQEMU系Cisco IOSv(GigabitEthernet、4アダプタ)を使用し、Gi0/0/Gi0/1の2ポートのみ使用。
 # IOSvはQEMU系ノードのため、R1への設定は `gns3lab deploy` のCLI自動投入(dynamips/IOU/VPCS
 # のみ対応)は非対応。GNS3のコンソールから手動で投入してください(このファイルのR1の
@@ -38,10 +53,13 @@
 #   0. R1はconfig自動投入非対応のため、GNS3コンソールからR1のconfig:を手動投入してから
 #      以下を実施すること
 #   1. PC1 -> ping 192.168.1.50 (outside static NAT経由のアドレス) が通り、
-#      実際にはEXT-SVR(203.0.113.50)へ到達していることを確認
-#   2. PC1 -> ping 203.0.113.50 (EXT-SVRの実アドレスへ直接) も、通常のルーティングで
-#      到達できることを確認 (このトポロジーではinside/outsideのアドレス空間が
-#      重複していないため、静的NATを介さない直接到達も可能な点に注意)
+#      実際にはEXT-SVR(203.0.113.50)へ到達していることを確認 (GNS3実機で5/5成功を確認済み)
+#   2. [参考] PC1 -> ping 203.0.113.50 (EXT-SVRの実アドレスへ直接) は、GNS3実機検証では
+#      タイムアウトする(要注意点)。R1のNATテーブル上はEXT-SVRとの往復自体は成立している
+#      (show ip nat translations verboseで動的extendedエントリの生成/Hits増加を確認可能)
+#      が、応答パケットの送信元が静的NATにより192.168.1.50へ無条件で書き換えられるため、
+#      PC1(VPCS)のping実装が送信元アドレスの不一致を理由に応答を破棄しているとみられる。
+#      詳細は docs/static-nat-outside-packet-flow.md の5章を参照。
 #   3. R1で `show ip nat translations` を実行し、
 #      `--- --- 192.168.1.50 203.0.113.50` のような
 #      outside local/outside global の静的エントリが常時存在することを確認
@@ -74,7 +92,7 @@ nodes:
        ip address 203.0.113.1 255.255.255.0
        ip nat outside
        no shutdown
-      ip nat outside source static 203.0.113.50 192.168.1.50
+      ip nat outside source static 203.0.113.50 192.168.1.50 no-alias add-route
 
   EXT-SVR:
     template: vpcs
@@ -106,6 +124,7 @@ notes:
       NAT方式 (outside static NATのみ)
       ip nat outside source static
         203.0.113.50 192.168.1.50
+        no-alias add-route
       EXT-SVR(outside実アドレス)を
       inside視点では192.168.1.50
       として見せる
@@ -116,9 +135,10 @@ notes:
       検証手順
       1. PC1 -> 192.168.1.50
          (outside static NAT経由)
-         でEXT-SVRへ到達確認
-      2. PC1 -> 203.0.113.50
-         (実アドレス)でも到達確認
+         でEXT-SVRへ到達確認(成功)
+      2. [参考]PC1 -> 203.0.113.50
+         (実アドレス直接)はタイムアウト
+         する(非対称変換のため、詳細docs参照)
       3. R1で show ip nat
          translations / statistics
 

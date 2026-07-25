@@ -1,0 +1,187 @@
+# 静的NAT(outside方向、outside-localがinside側サブネットと重複するケース)検証用トポロジー
+# 参考: https://www.infraexpert.com/study/natz6.html
+#
+# 構成: PC1 - R1 - EXT-SVR
+#   PC1     : 内部LANの一般クライアント (VPCS)
+#   R1      : NATルーター (Cisco IOSv。outside静的NAT + 明示的ホストルートを実施)
+#   EXT-SVR : 外部(outside)の実サーバーを模したノード (VPCS。実アドレスは10.1.1.10)
+#
+# static_nat_outside_topology.yml との違い:
+#   従来版はinside(192.168.1.0/24)とoutside(203.0.113.0/24)が別アドレス空間だったため、
+#   実アドレス宛への直接到達も経路的に成立してしまっていた。
+#   本トポロジーでは参考ページの構成に合わせ、outside-local(代理アドレス)を
+#   あえてinside側と同じサブネット(192.168.1.0/24)内のアドレスにする。これにより
+#   「ip nat outside source static」の実務的な使いどころ(外部の実ホストを、あたかも
+#   inside側の同一サブネット上にいるかのように見せかける)をそのまま再現できる。
+#
+# --- ip nat outside source static の意味(このトポロジーでの適用) ---
+#   ip nat outside source static <outside-global> <outside-local>
+#     outside-global = 10.1.1.10      (EXT-SVRの実アドレス。outsideネットワーク10.1.1.0/24)
+#     outside-local  = 192.168.1.20   (inside側から見えるEXT-SVRの代理アドレス。
+#                                       inside側のサブネット192.168.1.0/24内のアドレス)
+#
+# --- ip route が必要な理由 / no-alias を付ける理由 ---
+#   outside-local(192.168.1.20)はinside側サブネット(192.168.1.0/24)に含まれるアドレスの
+#   ため、この静的ルートが無いとR1はGi0/1(inside)上でARPによるローカル解決を試みてしまい
+#   (実際には存在しないホストのため)失敗する。そのため下記のホストルートで明示的に
+#   Gi0/0(outside)へ向けて転送するよう強制する。
+#
+#   ここで next-hop には **インターフェース名のみ(GigabitEthernet0/0)ではなく、
+#   outside側の実アドレス(next-hop IP)を指定する**必要がある。インターフェースのみを
+#   指定する静的ルートはP2Pリンク(シリアル等)でのみ有効な書き方であり、GigabitEthernet
+#   のようなマルチアクセス媒体では next-hopのIPアドレスを明示しないと正しく機能しない。
+#   本トポロジーではGi0/0の対向はEXT-SVR(10.1.1.10)のみのため、これをnext-hopとして使う。
+#     ip nat outside source static 10.1.1.10 192.168.1.20 no-alias
+#     ip route 192.168.1.20 255.255.255.255 10.1.1.10
+#
+#   `no-alias`は、既定でinside側インターフェースに作成されうる192.168.1.20宛の暗黙的な
+#   ARPエイリアス動作(効くかどうかが状況依存で不確実)を無効化し、上記の明示的な
+#   ホストルートのみに経路解決を委ねるためのもの。(参考: static_nat_outside_topology.yml
+#   では `no-alias add-route` を使い、ルートも自動生成させる簡潔な方法を採用している)
+#
+# R1はQEMU系Cisco IOSv(GigabitEthernet、4アダプタ)を使用し、Gi0/0/Gi0/1の2ポートのみ使用。
+# IOSvはQEMU系ノードのため、R1への設定は `gns3lab deploy` のCLI自動投入(dynamips/IOU/VPCS
+# のみ対応)は非対応。GNS3のコンソールから手動で投入してください(このファイルのR1の
+# config: の内容をそのまま貼り付け)。PC1/EXT-SVR(VPCS)は自動投入されます。
+#
+# template: は実テンプレート名の代わりに役割名 "iosv-router" を指定している。
+# gns3lab_templates.yml で環境ごとの実テンプレート名に対応付けること。
+#
+# --- IPアドレス計画 ---
+#   内部(inside) : 192.168.1.0/24
+#     R1 Gi0/1=.254, PC1=.10
+#     EXT-SVRのinside視点アドレス(outside static NAT) = 192.168.1.20 (同一サブネット内)
+#   外部(outside): 10.1.1.0/24
+#     R1 Gi0/0=.254, EXT-SVR(実アドレス)=.10
+#
+# --- 検証手順の例 (デプロイ後) ---
+#   0. R1はconfig自動投入非対応のため、GNS3コンソールからR1のconfig:を手動投入してから
+#      以下を実施すること
+#   1. PC1 -> ping 192.168.1.20 (outside static NAT経由のアドレス) が通り、
+#      実際にはEXT-SVR(10.1.1.10)へ到達していることを確認 (GNS3実機で5/5成功を確認済み)
+#   2. [参考] PC1 -> ping 10.1.1.10 (EXT-SVRの実アドレスへ直接) は、GNS3実機検証では
+#      タイムアウトする。R1のNATテーブル上はEXT-SVRとの往復自体は成立している(show ip nat
+#      statisticsでdynamic/extendedエントリの生成とHits増加を確認可能)が、応答パケットの
+#      送信元が静的NATにより192.168.1.20へ無条件で書き換えられるため、PC1(VPCS)のping
+#      実装が送信元アドレスの不一致を理由に応答を破棄しているとみられる
+#      (static_nat_outside_topology.ymlと同一の挙動。詳細は
+#      docs/static-nat-outside-packet-flow.md の5章を参照)
+#   3. R1で `show ip route 192.168.1.20` を実行し、ホストルート(next-hop=10.1.1.10)により
+#      Gi0/0(outside)経由で転送されることを確認(このルートが無いと192.168.1.0/24の接続
+#      ルートに従いGi0/1側でARP解決を試みて失敗する)(実機で確認済み)
+#   4. R1で `show ip nat translations` を実行し、
+#      `--- --- 192.168.1.20 10.1.1.10` のような
+#      outside local/outside global の静的エントリが常時存在することを確認
+#      (inside global/inside localは空欄 --- のままとなる)(実機で確認済み)
+#   5. R1で `show ip nat statistics` を実行し、Total active translations(static)や
+#      Hits/Missesを確認(実機で確認済み)
+
+name: static_nat_outside_hostroute_lab
+
+nodes:
+  PC1:
+    template: vpcs
+    x: -250
+    y: 200
+    config: |
+      ip 192.168.1.10 255.255.255.0 192.168.1.254
+      save
+
+  R1:
+    template: iosv-router
+    x: -50
+    y: -50
+    config: |
+      hostname R1
+      interface GigabitEthernet0/0
+       ip address 10.1.1.254 255.255.255.0
+       ip nat outside
+       no shutdown
+      interface GigabitEthernet0/1
+       ip address 192.168.1.254 255.255.255.0
+       ip nat inside
+       no shutdown
+      ip nat outside source static 10.1.1.10 192.168.1.20 no-alias
+      ip route 192.168.1.20 255.255.255.255 10.1.1.10
+
+  EXT-SVR:
+    template: vpcs
+    x: 150
+    y: -50
+    config: |
+      ip 10.1.1.10 255.255.255.0 10.1.1.254
+      save
+
+links:
+  - [PC1:0/0, R1:1/0]
+  - [R1:0/0, EXT-SVR:0/0]
+
+# notes: はGNS3のキャンバス上にテキスト注釈(drawing)として配置される(deploy時のみ反映)。
+# IPアドレスの注釈は 1アドレス = 1テキストボックス とし、各装置の近くに配置する。
+notes:
+  - x: -620
+    y: -440
+    text: |
+      静的NAT(outside/サブネット重複)検証ラボ
+      static_nat_outside_hostroute_lab
+      inside : 192.168.1.0/24
+      outside: 10.1.1.0/24
+      outside-localがinside側サブネット内に
+      重複するケース(要ホストルート)
+
+  - x: -620
+    y: -260
+    text: |
+      NAT方式 (outside static NAT + ホストルート)
+      ip nat outside source static
+        10.1.1.10 192.168.1.20 no-alias
+      ip route 192.168.1.20
+        255.255.255.255 10.1.1.10
+      EXT-SVR(outside実アドレス)を
+      inside視点では192.168.1.20
+      (inside側と同一サブネット)として見せる
+
+  - x: -300
+    y: -260
+    text: |
+      検証手順
+      1. PC1 -> 192.168.1.20
+         でEXT-SVRへ到達確認(成功)
+      2. [参考]PC1 -> 10.1.1.10
+         (実アドレス直接)はタイムアウト
+         する(非対称変換のため)
+      3. show ip route 192.168.1.20
+         でGi0/0経由になることを確認
+      4. R1で show ip nat
+         translations / statistics
+
+  - x: -300
+    y: 250
+    text: |
+      PC1
+      192.168.1.10
+
+  - x: -140
+    y: 20
+    text: |
+      R1 Gi0/1 (inside)
+      192.168.1.254
+
+  - x: 0
+    y: 20
+    text: |
+      R1 Gi0/0 (outside)
+      10.1.1.254
+
+  - x: 160
+    y: -140
+    text: |
+      EXT-SVR (実アドレス)
+      10.1.1.10
+
+  - x: 160
+    y: 20
+    text: |
+      EXT-SVR のinside視点アドレス
+      (outside static NAT、inside側と同一サブネット)
+      192.168.1.20
