@@ -1,0 +1,154 @@
+# 静的NAT(outside方向: ip nat outside source static)専用 検証用トポロジー
+#
+# 構成: PC1 - R1 - EXT-SVR
+#   PC1     : 内部LANの一般クライアント (VPCS)
+#   R1      : NATルーター (Cisco IOSv。outside静的NATのみを実施。inside static/PATは使わない)
+#   EXT-SVR : 外部(outside)の実サーバーを模したノード (VPCS。実アドレスは203.0.113.50)
+#
+# `ip nat inside source static ...` (inside側の静的NAT) は既存の static_nat_topology.yml で
+# 検証済みのため、本トポロジーでは対になる `ip nat outside source static ...` (outside側の
+# 静的NAT)のみを対象とする。他のNAT設定(inside static/動的PAT)は一切投入しない。
+#
+# --- ip nat outside source static の意味 ---
+#   ip nat outside source static <outside-global> <outside-local>
+#     outside-global : outsideホストの実アドレス (EXT-SVRが実際に持つアドレス)
+#     outside-local  : inside側から見たときにそのoutsideホストが「見える」アドレス
+#   本トポロジーでは EXT-SVR の実アドレス 203.0.113.50 を、inside側からは
+#   192.168.1.50 (insideのアドレス体系に近い、insideから見た代理アドレス)として
+#   見せる設定を行う。static NATエントリは双方向変換のため、PC1から192.168.1.50宛に
+#   送ると宛先が203.0.113.50に変換されてEXT-SVRに届き、戻りの応答も192.168.1.50に
+#   変換されてPC1に返る。
+#
+# R1はQEMU系Cisco IOSv(GigabitEthernet、4アダプタ)を使用し、Gi0/0/Gi0/1の2ポートのみ使用。
+# IOSvはQEMU系ノードのため、R1への設定は `gns3lab deploy` のCLI自動投入(dynamips/IOU/VPCS
+# のみ対応)は非対応。GNS3のコンソールから手動で投入してください(このファイルのR1の
+# config: の内容をそのまま貼り付け)。PC1/EXT-SVR(VPCS)は自動投入されます。
+#
+# template: は実テンプレート名の代わりに役割名 "iosv-router" を指定している。
+# gns3lab_templates.yml で環境ごとの実テンプレート名に対応付けること。
+#
+# --- IPアドレス計画 ---
+#   内部(inside) : 192.168.1.0/24
+#     R1 Gi0/0=.1, PC1=.10
+#   外部(outside): 203.0.113.0/24  (RFC5737 検証用アドレス)
+#     R1 Gi0/1=.1, EXT-SVR(実アドレス)=.50
+#     EXT-SVRのinside視点アドレス(outside static NAT) = 192.168.1.50
+#
+# --- 検証手順の例 (デプロイ後) ---
+#   0. R1はconfig自動投入非対応のため、GNS3コンソールからR1のconfig:を手動投入してから
+#      以下を実施すること
+#   1. PC1 -> ping 192.168.1.50 (outside static NAT経由のアドレス) が通り、
+#      実際にはEXT-SVR(203.0.113.50)へ到達していることを確認
+#   2. PC1 -> ping 203.0.113.50 (EXT-SVRの実アドレスへ直接) も、通常のルーティングで
+#      到達できることを確認 (このトポロジーではinside/outsideのアドレス空間が
+#      重複していないため、静的NATを介さない直接到達も可能な点に注意)
+#   3. R1で `show ip nat translations` を実行し、
+#      `--- --- 192.168.1.50 203.0.113.50` のような
+#      outside local/outside global の静的エントリが常時存在することを確認
+#      (inside global/inside localは空欄 --- のままとなる)
+#   4. R1で `show ip nat statistics` を実行し、Total active translations(static)や
+#      Hits/Missesを確認
+
+name: static_nat_outside_lab
+
+nodes:
+  PC1:
+    template: vpcs
+    x: -250
+    y: 200
+    config: |
+      ip 192.168.1.10 255.255.255.0 192.168.1.1
+      save
+
+  R1:
+    template: iosv-router
+    x: -50
+    y: -50
+    config: |
+      hostname R1
+      interface GigabitEthernet0/0
+       ip address 192.168.1.1 255.255.255.0
+       ip nat inside
+       no shutdown
+      interface GigabitEthernet0/1
+       ip address 203.0.113.1 255.255.255.0
+       ip nat outside
+       no shutdown
+      ip nat outside source static 203.0.113.50 192.168.1.50
+
+  EXT-SVR:
+    template: vpcs
+    x: 150
+    y: -50
+    config: |
+      ip 203.0.113.50 255.255.255.0 203.0.113.1
+      save
+
+links:
+  - [PC1:0/0, R1:0/0]
+  - [R1:1/0, EXT-SVR:0/0]
+
+# notes: はGNS3のキャンバス上にテキスト注釈(drawing)として配置される(deploy時のみ反映)。
+# IPアドレスの注釈は 1アドレス = 1テキストボックス とし、各装置の近くに配置する。
+notes:
+  - x: -620
+    y: -440
+    text: |
+      静的NAT(outside)検証ラボ: static_nat_outside_lab
+      inside : 192.168.1.0/24
+      outside: 203.0.113.0/24
+      ip nat outside source static の検証専用
+      (inside static/動的PATは投入しない)
+
+  - x: -620
+    y: -260
+    text: |
+      NAT方式 (outside static NATのみ)
+      ip nat outside source static
+        203.0.113.50 192.168.1.50
+      EXT-SVR(outside実アドレス)を
+      inside視点では192.168.1.50
+      として見せる
+
+  - x: -300
+    y: -260
+    text: |
+      検証手順
+      1. PC1 -> 192.168.1.50
+         (outside static NAT経由)
+         でEXT-SVRへ到達確認
+      2. PC1 -> 203.0.113.50
+         (実アドレス)でも到達確認
+      3. R1で show ip nat
+         translations / statistics
+
+  - x: -300
+    y: 250
+    text: |
+      PC1
+      192.168.1.10
+
+  - x: -140
+    y: 20
+    text: |
+      R1 Gi0/0 (inside)
+      192.168.1.1
+
+  - x: 0
+    y: 20
+    text: |
+      R1 Gi0/1 (outside)
+      203.0.113.1
+
+  - x: 160
+    y: -140
+    text: |
+      EXT-SVR (実アドレス)
+      203.0.113.50
+
+  - x: 160
+    y: 20
+    text: |
+      EXT-SVR のinside視点アドレス
+      (outside static NAT)
+      192.168.1.50

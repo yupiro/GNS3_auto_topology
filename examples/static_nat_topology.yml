@@ -1,0 +1,181 @@
+# 静的NAT(Static NAT)専用 検証用トポロジー
+#
+# 構成: PC1,SVR1 - SW-IN - R1 - EXT-PC
+#   PC1     : 内部LANの一般クライアント (VPCS。静的NATでアウトバウンド通信を検証)
+#   SVR1    : 内部LANの公開サーバー役 (VPCS。静的NATで外部から到達可能にする)
+#   SW-IN   : 内部LANスイッチ (config投入なし)
+#   R1      : NATルーター (Cisco IOSv。inside/outside両インターフェースで静的NATのみを実施)
+#   EXT-PC  : インターネット上のホストを模したノード (VPCS)
+#
+# 動的PAT(overload)は使用せず、PC1/SVR1それぞれに個別の1:1静的NATエントリを設定する。
+# ip nat inside source static の2つの変換だけで完結する、静的NATのみの最小構成。
+#
+# R1はQEMU系Cisco IOSv(GigabitEthernet、4アダプタ)を使用し、Gi0/0/Gi0/1の2ポートのみ使用。
+# IOSvはQEMU系ノードのため、R1への設定は `gns3lab deploy` のCLI自動投入(dynamips/IOU/VPCS
+# のみ対応)は非対応。GNS3のコンソールから手動で投入してください(このファイルのR1の
+# config: の内容をそのまま貼り付け)。PC1/SVR1/EXT-PC(VPCS)は自動投入されます。
+#
+# template: は実テンプレート名の代わりに役割名 "iosv-router" を指定している。
+# gns3lab_templates.yml で環境ごとの実テンプレート名に対応付けること。
+#
+# --- IPアドレス計画 ---
+#   内部(inside) : 192.168.1.0/24
+#     R1 Gi0/0=.1, PC1=.10, SVR1=.100
+#   外部(outside): 203.0.113.0/24  (RFC5737 検証用アドレス)
+#     R1 Gi0/1=.1, EXT-PC=.254
+#     PC1  の静的NAT公開アドレス  = 203.0.113.10
+#     SVR1 の静的NAT公開アドレス  = 203.0.113.100
+#
+#   NAT方式 (静的NATのみ):
+#     - PC1  => ip nat inside source static 192.168.1.10  203.0.113.10
+#       内部PC1から外部への通信は常に203.0.113.10として変換される(1:1固定、PAT無し)。
+#     - SVR1 => ip nat inside source static 192.168.1.100 203.0.113.100
+#       外部から203.0.113.100宛のアクセスがSVR1(192.168.1.100)へ変換される。
+#
+# --- 検証手順の例 (デプロイ後) ---
+#   0. R1はconfig自動投入非対応のため、GNS3コンソールからR1のconfig:を手動投入してから
+#      以下を実施すること
+#   1. PC1 -> ping 203.0.113.254 (EXT-PC) が通ることを確認
+#   2. R1で `show ip nat translations` を実行し、192.168.1.10 <-> 203.0.113.10 の
+#      静的な1:1変換エントリが (--- 表記で)常時存在することを確認
+#   3. EXT-PC -> ping 203.0.113.100 が通ることを確認し、R1の
+#      `show ip nat translations` で 192.168.1.100 <-> 203.0.113.100 の
+#      静的な1:1変換エントリが常時存在することを確認
+#   4. EXT-PC -> ping 192.168.1.10 / 192.168.1.100 (内部アドレスに直接) は失敗することを確認
+#      (静的NATは外部公開アドレス宛のみ変換され、内部プライベートアドレスへの直接到達は不可)
+#   5. R1で `show ip nat statistics` を実行し、Total active translations(2 static)や
+#      Hits/Misses を確認
+
+name: static_nat_lab
+
+nodes:
+  PC1:
+    template: vpcs
+    x: -250
+    y: 200
+    config: |
+      ip 192.168.1.10 255.255.255.0 192.168.1.1
+      save
+
+  SVR1:
+    template: vpcs
+    x: -50
+    y: 200
+    config: |
+      ip 192.168.1.100 255.255.255.0 192.168.1.1
+      save
+
+  SW-IN:
+    template: switch
+    x: -150
+    y: 50
+
+  R1:
+    template: iosv-router
+    x: -150
+    y: -100
+    config: |
+      hostname R1
+      interface GigabitEthernet0/0
+       ip address 192.168.1.1 255.255.255.0
+       ip nat inside
+       no shutdown
+      interface GigabitEthernet0/1
+       ip address 203.0.113.1 255.255.255.0
+       ip nat outside
+       no shutdown
+      ip nat inside source static 192.168.1.10 203.0.113.10
+      ip nat inside source static 192.168.1.100 203.0.113.100
+
+  EXT-PC:
+    template: vpcs
+    x: 100
+    y: -100
+    config: |
+      ip 203.0.113.254 255.255.255.0 203.0.113.1
+      save
+
+links:
+  - [PC1:0/0, SW-IN:0/0]
+  - [SVR1:0/0, SW-IN:0/1]
+  - [SW-IN:0/2, R1:0/0]
+  - [R1:1/0, EXT-PC:0/0]
+
+# notes: はGNS3のキャンバス上にテキスト注釈(drawing)として配置される(deploy時のみ反映)。
+# IPアドレスの注釈は 1アドレス = 1テキストボックス とし、各装置の近くに配置する。
+notes:
+  - x: -620
+    y: -440
+    text: |
+      静的NAT専用ラボ: static_nat_lab
+      inside : 192.168.1.0/24
+      outside: 203.0.113.0/24
+      (outsideはRFC5737検証用)
+      動的PAT(overload)は使用しない
+
+  - x: -620
+    y: -260
+    text: |
+      NAT方式 (静的NATのみ)
+      PC1:
+        静的NAT(1:1)
+        -> 203.0.113.10
+      SVR1:
+        静的NAT(1:1)
+        -> 203.0.113.100
+      いずれも常時変換エントリが存在
+
+  - x: -300
+    y: -260
+    text: |
+      検証手順
+      1. PC1 -> EXT-PC
+         (203.0.113.254) へping
+      2. EXT-PC -> SVR1公開先
+         (203.0.113.100) へping
+      3. EXT-PC -> PC1/SVR1直接
+         (192.168.1.x) は失敗すること
+      4. R1で show ip nat
+         translations / statistics
+
+  - x: -320
+    y: 250
+    text: |
+      PC1
+      192.168.1.10
+
+  - x: -320
+    y: 300
+    text: |
+      PC1 公開アドレス(静的NAT)
+      203.0.113.10
+
+  - x: -120
+    y: 250
+    text: |
+      SVR1
+      192.168.1.100
+
+  - x: -120
+    y: 300
+    text: |
+      SVR1 公開アドレス(静的NAT)
+      203.0.113.100
+
+  - x: -320
+    y: -160
+    text: |
+      R1 Gi0/0 (inside)
+      192.168.1.1
+
+  - x: -120
+    y: -160
+    text: |
+      R1 Gi0/1 (outside)
+      203.0.113.1
+
+  - x: 60
+    y: -160
+    text: |
+      EXT-PC
+      203.0.113.254
