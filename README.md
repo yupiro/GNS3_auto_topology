@@ -159,6 +159,10 @@ templates:
 - `examples/financial_wan_topology.yml`: 東京DC(本番)/大阪DC(DR)/本店をWAN経由で接続し、ASAvファイアウォールでDMZを分離した金融系トポロジー
 - `examples/wan_gre_mpls_redundancy.yml`: MPLSプライマリ経路 + GRE over IPsec VPNバックアップ経路によるWAN冗長化トポロジー
   - 設計書: [基本設計書](docs/wan-redundancy-basic-design.md) / [詳細設計書](docs/wan-redundancy-detailed-design.md)
+- `examples/ipsec_gre_ospf_topology.yml`: 2拠点をIPsec上のGREトンネルで接続しOSPFを流すトポロジー。
+  各拠点はアクセスRT配下にhost(OSPF)とserver(static route + redistribute)を収容する
+  - 設計書: [基本設計書](docs/ipsec-gre-ospf-basic-design.md) / [詳細設計書](docs/ipsec-gre-ospf-detailed-design.md)
+  - 構築手順書: [ipsec-gre-ospf-construction-guide.md](docs/ipsec-gre-ospf-construction-guide.md)
 - `examples/nat_topology.yml`: 内部LAN(PC1/PC2/SVR1) - NATルーター(R1) - 外部ホスト(EXT-PC) による
   動的PAT(overload)と静的NATの検証トポロジー
   - 設計書: [基本設計書](docs/nat-basic-design.md) / [詳細設計書](docs/nat-detailed-design.md)

@@ -1,0 +1,284 @@
+# 2拠点間 IPsec + GRE(OSPF) 接続トポロジー(拠点内はアクセスRT経由でhost/serverを収容)
+#
+# 構成:
+#   東京側(WAN-RT-A)と大阪側(WAN-RT-B)の2拠点を、インターネット想定の共有セグメント
+#   (INET_Core)経由でIPsecトンネルを張り、その上にGREトンネル(Tunnel0)を通す。
+#   GREトンネル区間ではOSPFを有効化し、拠点間の経路交換はOSPFで行う。
+#
+#   各拠点のWAN-RT配下にはアクセスRT(ACCESS-RT-A/B)を1台用意し、
+#   host(一般端末)とserver(サーバー)をそれぞれ収容する。
+#     - host   との接続(ACCESS-RT-*-Host間)  : OSPFで経路広告(動的)
+#     - server との接続(ACCESS-RT-*-Server間): OSPFには含めず、WAN-RT側にstatic routeを
+#       設定して到達性を確保する(サーバーセグメントを意図的にOSPFの動的広告から外し、
+#       静的経路として明示管理する設計。ACCESS-RT自体はserverセグメントに直接接続の
+#       ため`ip route`は不要で、WAN-RT側にACCESS-RTを次ホップとした経路を1本追加するのみ)
+#     - 対向拠点からserverへも到達できるよう、WAN-RTでこのstatic routeを
+#       `redistribute static subnets` によりOSPFへ再配布する(OSPF上はO E2として学習される)
+#
+#   WAN-RT-A / WAN-RT-B / ACCESS-RT-A / ACCESS-RT-B : Cisco IOSv 15.9(3)M12
+#   INET_Core                                        : Ethernet switch (config投入なし)
+#   Host-A / Host-B / Server-A / Server-B            : VPCS
+#
+#   template: は実テンプレート名の代わりに役割名 "iosv-router" を指定している。
+#   gns3lab_templates.yml で環境ごとの実テンプレート名に対応付けること。
+#
+# --- IPアドレス計画 ---
+#   Loopback0(router-id)        : WAN-RT-A=1.1.1.1, WAN-RT-B=2.2.2.2
+#   INET共有セグメント(IPsec対向): 203.0.113.0/24 (WAN-RT-A Gi0/1=.1, WAN-RT-B Gi0/1=.2)
+#   GREトンネル(Tunnel0)         : 172.31.0.0/30 (WAN-RT-A=.1, WAN-RT-B=.2)
+#
+#   拠点A(東京):
+#     WAN-RT-A - ACCESS-RT-A間 : 10.10.1.0/30 (WAN-RT-A Gi0/0=.1, ACCESS-RT-A Gi0/0=.2)
+#     Host-Aセグメント          : 10.20.1.0/24 (ACCESS-RT-A Gi0/1=.1, Host-A=.10) ※OSPF
+#     Server-Aセグメント        : 10.30.1.0/24 (ACCESS-RT-A Gi0/2=.1, Server-A=.10) ※static
+#
+#   拠点B(大阪):
+#     WAN-RT-B - ACCESS-RT-B間 : 10.10.2.0/30 (WAN-RT-B Gi0/0=.1, ACCESS-RT-B Gi0/0=.2)
+#     Host-Bセグメント          : 10.20.2.0/24 (ACCESS-RT-B Gi0/1=.1, Host-B=.10) ※OSPF
+#     Server-Bセグメント        : 10.30.2.0/24 (ACCESS-RT-B Gi0/2=.1, Server-B=.10) ※static
+#
+#   ルーティング: OSPF area 0 (WAN-RT-ACCESS-RT間 + Hostセグメント + Tunnel0のみ広告)
+#     - Serverセグメントはネットワーク文に含めず、WAN-RTのstatic route +
+#       `redistribute static subnets` で拠点間到達性を確保(O E2として学習される)
+#   IPsec: crypto isakmp policy(AES256/SHA256/PSK) + ipsec profileをTunnel0に
+#          `tunnel protection ipsec profile` で適用(GRE over IPsec, mode transport)
+#
+# --- 検証手順の例 (deploy後) ---
+#   1. WAN-RT-Aで `show crypto isakmp sa` / `show crypto ipsec sa` → Tunnel0上で
+#      IPsec SAが確立していること
+#   2. WAN-RT-Aで `show ip ospf neighbor` → Tunnel0経由でWAN-RT-BがFULLであること
+#   3. WAN-RT-Aで `show ip route` → 10.20.2.0/24(Host-B)がO(OSPF内部経路)、
+#      10.30.2.0/24(Server-B)がO E2(再配布されたstatic経路)として見えること
+#   4. Host-A -> Host-B へ ping → OSPFで学習した経路での拠点間疎通確認
+#   5. Host-A -> Server-B へ ping → static route再配布経由での拠点間疎通確認
+#   6. ACCESS-RT-Aで `show ip route static` → Server-Aへの経路が
+#      static(自RT宛のip route設定はWAN-RT-A側にあるため、ACCESS-RT-Aでは
+#      Server-Aセグメントがconnectedとして見えることを確認)
+#
+# --- 注意 ---
+#   Cisco IOSv はQEMU系ノードのため `gns3lab deploy` のCLI自動投入は非対応です
+#   (dynamips/IOU/VPCSのみ対応)。WAN-RT-*/ACCESS-RT-*への設定は
+#   GNS3のコンソールから手動で投入してください(このファイルの config: をそのまま貼り付け)。
+
+name: ipsec_gre_ospf_lab
+
+nodes:
+  # --- インターネット想定の共有セグメント(IPsec対向用) ---
+  INET_Core:
+    template: switch
+    x: 0
+    y: -300
+
+  # --- 拠点A (東京側) ---
+  WAN-RT-A:
+    template: iosv-router
+    x: -300
+    y: -300
+    config: |
+      hostname WAN-RT-A
+      interface Loopback0
+       ip address 1.1.1.1 255.255.255.255
+      interface GigabitEthernet0/0
+       ip address 10.10.1.1 255.255.255.252
+       no shutdown
+      interface GigabitEthernet0/1
+       ip address 203.0.113.1 255.255.255.0
+       no shutdown
+      crypto isakmp policy 10
+       encryption aes 256
+       hash sha256
+       authentication pre-share
+       group 14
+      crypto isakmp key VpnKey2026 address 203.0.113.2
+      crypto ipsec transform-set TS esp-aes 256 esp-sha256-hmac
+       mode transport
+      crypto ipsec profile GRE-PROTECT
+       set transform-set TS
+      interface Tunnel0
+       ip address 172.31.0.1 255.255.255.252
+       tunnel source GigabitEthernet0/1
+       tunnel destination 203.0.113.2
+       tunnel protection ipsec profile GRE-PROTECT
+       no shutdown
+      ip route 10.30.1.0 255.255.255.0 10.10.1.2
+      router ospf 1
+       network 1.1.1.1 0.0.0.0 area 0
+       network 10.10.1.0 0.0.0.3 area 0
+       network 172.31.0.0 0.0.0.3 area 0
+       redistribute static subnets
+
+  ACCESS-RT-A:
+    template: iosv-router
+    x: -300
+    y: -100
+    config: |
+      hostname ACCESS-RT-A
+      interface GigabitEthernet0/0
+       ip address 10.10.1.2 255.255.255.252
+       no shutdown
+      interface GigabitEthernet0/1
+       ip address 10.20.1.1 255.255.255.0
+       no shutdown
+      interface GigabitEthernet0/2
+       ip address 10.30.1.1 255.255.255.0
+       no shutdown
+      router ospf 1
+       network 10.10.1.0 0.0.0.3 area 0
+       network 10.20.1.0 0.0.0.255 area 0
+
+  Host-A:
+    template: vpcs
+    x: -450
+    y: 50
+    config: |
+      ip 10.20.1.10 255.255.255.0 10.20.1.1
+      save
+
+  Server-A:
+    template: vpcs
+    x: -150
+    y: 50
+    config: |
+      ip 10.30.1.10 255.255.255.0 10.30.1.1
+      save
+
+  # --- 拠点B (大阪側) ---
+  WAN-RT-B:
+    template: iosv-router
+    x: 300
+    y: -300
+    config: |
+      hostname WAN-RT-B
+      interface Loopback0
+       ip address 2.2.2.2 255.255.255.255
+      interface GigabitEthernet0/0
+       ip address 10.10.2.1 255.255.255.252
+       no shutdown
+      interface GigabitEthernet0/1
+       ip address 203.0.113.2 255.255.255.0
+       no shutdown
+      crypto isakmp policy 10
+       encryption aes 256
+       hash sha256
+       authentication pre-share
+       group 14
+      crypto isakmp key VpnKey2026 address 203.0.113.1
+      crypto ipsec transform-set TS esp-aes 256 esp-sha256-hmac
+       mode transport
+      crypto ipsec profile GRE-PROTECT
+       set transform-set TS
+      interface Tunnel0
+       ip address 172.31.0.2 255.255.255.252
+       tunnel source GigabitEthernet0/1
+       tunnel destination 203.0.113.1
+       tunnel protection ipsec profile GRE-PROTECT
+       no shutdown
+      ip route 10.30.2.0 255.255.255.0 10.10.2.2
+      router ospf 1
+       network 2.2.2.2 0.0.0.0 area 0
+       network 10.10.2.0 0.0.0.3 area 0
+       network 172.31.0.0 0.0.0.3 area 0
+       redistribute static subnets
+
+  ACCESS-RT-B:
+    template: iosv-router
+    x: 300
+    y: -100
+    config: |
+      hostname ACCESS-RT-B
+      interface GigabitEthernet0/0
+       ip address 10.10.2.2 255.255.255.252
+       no shutdown
+      interface GigabitEthernet0/1
+       ip address 10.20.2.1 255.255.255.0
+       no shutdown
+      interface GigabitEthernet0/2
+       ip address 10.30.2.1 255.255.255.0
+       no shutdown
+      router ospf 1
+       network 10.10.2.0 0.0.0.3 area 0
+       network 10.20.2.0 0.0.0.255 area 0
+
+  Host-B:
+    template: vpcs
+    x: 150
+    y: 50
+    config: |
+      ip 10.20.2.10 255.255.255.0 10.20.2.1
+      save
+
+  Server-B:
+    template: vpcs
+    x: 450
+    y: 50
+    config: |
+      ip 10.30.2.10 255.255.255.0 10.30.2.1
+      save
+
+links:
+  # IPsec対向(INET共有セグメント)
+  - [WAN-RT-A:1/0, INET_Core:0/0]
+  - [WAN-RT-B:1/0, INET_Core:0/1]
+
+  # 拠点A: WAN-RT - ACCESS-RT - Host/Server
+  - [WAN-RT-A:0/0, ACCESS-RT-A:0/0]
+  - [ACCESS-RT-A:1/0, Host-A:0/0]
+  - [ACCESS-RT-A:2/0, Server-A:0/0]
+
+  # 拠点B: WAN-RT - ACCESS-RT - Host/Server
+  - [WAN-RT-B:0/0, ACCESS-RT-B:0/0]
+  - [ACCESS-RT-B:1/0, Host-B:0/0]
+  - [ACCESS-RT-B:2/0, Server-B:0/0]
+
+# notes: はGNS3のキャンバス上にテキスト注釈(drawing)として配置される(deploy時のみ反映)。
+notes:
+  - x: -650
+    y: -450
+    text: |
+      IPsec + GRE(OSPF) 2拠点間トポロジー
+      ipsec_gre_ospf_lab
+      WAN-RT間: IPsec上にGREトンネル、
+      GRE区間でOSPFを有効化
+      拠点内: ACCESS-RTがhost/serverを収容
+        host   -> OSPFで動的広告
+        server -> static route
+                  (WAN-RTでredistribute)
+
+  - x: -420
+    y: -280
+    text: |
+      WAN-RT-A
+      Lo0: 1.1.1.1
+      Gi0/1(INET): 203.0.113.1
+      Tunnel0: 172.31.0.1/30
+
+  - x: -420
+    y: -140
+    text: |
+      ACCESS-RT-A
+      Gi0/0(上流): 10.10.1.2
+      Gi0/1(Host): 10.20.1.1 [OSPF]
+      Gi0/2(Server): 10.30.1.1 [static]
+
+  - x: 30
+    y: -420
+    text: |
+      INET_Core
+      203.0.113.0/24
+      (インターネット想定の共有セグメント)
+
+  - x: 220
+    y: -280
+    text: |
+      WAN-RT-B
+      Lo0: 2.2.2.2
+      Gi0/1(INET): 203.0.113.2
+      Tunnel0: 172.31.0.2/30
+
+  - x: 220
+    y: -140
+    text: |
+      ACCESS-RT-B
+      Gi0/0(上流): 10.10.2.2
+      Gi0/1(Host): 10.20.2.1 [OSPF]
+      Gi0/2(Server): 10.30.2.1 [static]
