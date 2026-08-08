@@ -20,6 +20,12 @@ SE = 0xF0
 IOS_BOOT_TIMEOUT = 180
 CONNECT_TIMEOUT = 10
 
+# SONiC-VSは多数のdockerコンテナ(swss/syncd/bgp/teamd等)が起動してから
+# ログインプロンプトが出るため、IOS系より長めに待つ。
+SONIC_BOOT_TIMEOUT = 300
+SONIC_DEFAULT_USERNAME = "admin"
+SONIC_DEFAULT_PASSWORD = "YourPaSsWoRd"
+
 
 class ConsoleError(RuntimeError):
     pass
@@ -109,10 +115,19 @@ def push_node_config(base, node, node_def, config_text):
         raise ConsoleError("console のホスト/ポートが取得できません")
 
     node_type = node.get("node_type", "")
+    platform = node_def.get("platform")
     if node_type in ("dynamips", "iou"):
         _push_ios_config(host, port, config_text, node_def.get("enable_password"))
     elif node_type == "vpcs":
         _push_vpcs_config(host, port, config_text)
+    elif node_type == "qemu" and platform == "sonic":
+        _push_sonic_vtysh_config(
+            host,
+            port,
+            config_text,
+            username=node_def.get("username"),
+            password=node_def.get("password"),
+        )
     else:
         raise ConsoleError(f"node_type={node_type!r} の自動設定投入には未対応です")
 
@@ -166,6 +181,64 @@ def _push_ios_config(host, port, config_text, enable_password=None):
         tn.expect(["#"], timeout=5)
         tn.write_line("write memory")
         tn.expect(["[OK]", "#"], timeout=15)
+    finally:
+        tn.close()
+
+
+def _push_sonic_vtysh_config(host, port, config_text, username=None, password=None):
+    """SONiC-VSへ、vtysh(FRR)経由でルーティング設定を投入する。
+
+    SONiCはIOSと違い「ログイン→bashシェル」のモデルのため、まずlogin/Passwordの
+    プロンプトを検出してログインし、その後 `vtysh` に入って Cisco ライクな構文で
+    configure terminal ... end という流れで投入する。
+
+    対応範囲は vtysh (FRR) が扱うルーティング設定 (router bgp/ospf, ip route,
+    route-map 等) のみ。インターフェースIPやVLANなどSONiC本体の config_db 側の
+    設定は対象外 (`sudo config ...` を使うか、GNS3コンソールから手動投入する)。
+    """
+    username = username or SONIC_DEFAULT_USERNAME
+    password = password or SONIC_DEFAULT_PASSWORD
+
+    tn = MiniTelnet(host, port)
+    try:
+        deadline = time.time() + SONIC_BOOT_TIMEOUT
+        shell_ready = False
+        while time.time() < deadline and not shell_ready:
+            pattern, _ = tn.expect(["login:", "Password:", "$ "], timeout=5)
+            if pattern is None:
+                tn.write("\r\n")
+            elif pattern == "login:":
+                tn.write_line(username)
+            elif pattern == "Password:":
+                tn.write_line(password)
+            else:
+                shell_ready = True
+        if not shell_ready:
+            raise ConsoleError("ログインプロンプト(bashシェル)を検出できませんでした (タイムアウト)")
+
+        tn.write_line("vtysh")
+        pattern, _ = tn.expect(["#"], timeout=15)
+        if pattern is None:
+            raise ConsoleError("vtysh の起動に失敗しました")
+
+        tn.write_line("configure terminal")
+        pattern, _ = tn.expect(["(config)#"], timeout=5)
+        if pattern is None:
+            raise ConsoleError("vtysh の configure terminal に入れませんでした")
+
+        for line in config_text.splitlines():
+            line = line.strip()
+            if not line or line.startswith("!"):
+                continue
+            tn.write_line(line)
+            time.sleep(0.15)
+
+        tn.write_line("end")
+        tn.expect(["#"], timeout=5)
+        tn.write_line("write memory")
+        tn.expect(["#"], timeout=15)
+        tn.write_line("exit")
+        tn.expect(["$"], timeout=5)
     finally:
         tn.close()
 

@@ -91,6 +91,8 @@ templates:
   機種依存（例: c3725系は `FastEthernet0/0`、IOSv系は `GigabitEthernet0/0`）なので、
   対応表で全く異なるプラットフォームに差し替えると `config:` の内容と機種が一致しなくなります。
   同じインターフェース構成・CLI体系を持つ機種同士（例: `c3725` ↔ `c7200`）の読み替えに使ってください。
+- SONiC-VS/FRR/Cumulus VX/OPNsense/MikroTik CHR/OpenWrtなど無料で導入済みの機種の特徴・
+  ログイン情報・基本操作は [free-appliances-guide.md](docs/free-appliances-guide.md) を参照。
 
 ## 使い方
 
@@ -195,10 +197,41 @@ nodes:
 ```
 
 - 対応ノード種別: dynamips/IOU系ルータ（`enable` → `configure terminal` → 設定投入 →
-  `end` → `write memory`）、VPCS（プロンプト待ちで行ごとに投入）。それ以外の種別は
-  自動投入できないため警告を出してスキップします。
+  `end` → `write memory`）、VPCS（プロンプト待ちで行ごとに投入）、SONiC-VS（`platform: sonic`
+  を指定したQEMUノードのみ。下記参照）。それ以外の種別は自動投入できないため警告を出して
+  スキップします。
 - enableパスワードが設定されているテンプレートの場合は `enable_password:` をノードに
   追加してください。
+
+**SONiC-VSへの自動投入（`platform: sonic`）**
+
+SONiC-VSはIOSと違い「ログイン→bashシェル」のモデルのため、`platform: sonic` を指定した
+ノードだけ専用のログイン→`vtysh`投入ロジックを使います。
+
+```yaml
+nodes:
+  sw1:
+    template: sonic-switch
+    platform: sonic          # これが無いと他のQEMU系同様「未対応」でスキップされる
+    x: 0
+    y: 0
+    # username / password省略時は admin / YourPaSsWoRd (SONiC-VSのデフォルト)
+    config: |
+      router bgp 65000
+       neighbor 10.0.0.2 remote-as 65001
+       address-family ipv4 unicast
+        neighbor 10.0.0.2 activate
+       exit-address-family
+```
+
+- ログイン（`login:`→ユーザ名→`Password:`→パスワード）→ `vtysh` → `configure terminal`
+  → 各行投入 → `end` → `write memory` → `exit` という流れで投入します。
+- `config:` に書けるのは **vtysh (FRR) が扱うルーティング設定**（`router bgp`/`router ospf`/
+  `ip route`/`route-map` など）のみです。インターフェースIPやVLANなどSONiC本体の
+  `config_db` 側の設定（`sudo config interface ip add ...` 等）は対象外のため、
+  GNS3コンソールから手動で投入してください。
+- SONiC-VSは起動に数分かかる（swss/syncd/bgp/teamd等の複数dockerコンテナが立ち上がる）
+  ため、ログインプロンプト検出は最大300秒待った上でタイムアウトします。
 - 投入結果はノードごとに `ノード名: OK` / `ノード名: 失敗 - 理由` の形式で表示され、
   1ノードの失敗が他ノードの投入を止めることはありません。
 - タイミング依存の自動操作のため、初回はGNS3のWebUIでコンソールを開いて実際に
