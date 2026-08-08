@@ -1,10 +1,11 @@
 # VXLAN/EVPN ファブリック検証ネットワーク 基本設計書
 
 - **対象トポロジー**: [`vxlan_evpn_topology.yml`](../examples/vxlan_evpn_topology.yml)
-- **版数**: 1.0
-- **ステータス**: 設計・トポロジー定義・GNS3へのデプロイまで実施済み。SPINE/LEAF1/LEAF2への
-  config手動投入・実機での疎通検証は未実施（検証手順は
-  [詳細設計書 7章](./vxlan-evpn-detailed-design.md#7-試験項目計画)を参照）
+- **版数**: 1.1
+- **ステータス**: **GNS3実機検証済み**（PC1-PC2間のVXLAN越しL2疎通、OSPF Full、BGP EVPN
+  Established、EVPN Type-2/3ルート学習まで確認済み。検証結果は
+  [詳細設計書 7章](./vxlan-evpn-detailed-design.md#7-試験項目結果)を参照）。検証の過程で
+  判明した重要な注意点が複数あるため、必ず[7章](#7-前提条件制約事項)を読んでから構築すること
 
 1台のRoute Reflector（RR）配下に2台のVTEP（VXLANトンネル終端点）をぶら下げ、EVPN
 （Ethernet VPN, BGP address-family `l2vpn evpn`）で学習したMACアドレス情報をもとに、
@@ -114,9 +115,18 @@ Route Reflectorを用いることで、LEAF台数が増えてもLEAF同士がフ
 - SPINE（FRR）/LEAF1・LEAF2（Cumulus VX）はいずれもQEMU系ノードのため、`gns3lab deploy`
   のCLI自動投入（dynamips/IOU/VPCS/SONiC-VS(`platform: sonic`)のみ対応）は非対応。
   設定はGNS3コンソールから手動投入する運用を前提とする（PC1/PC2のVPCSは自動投入対応）。
-- Cumulus VX 5.4.0はビルドによりNVUE（`nv add ...`）がデフォルトのケースがある。本設計の
-  コンフィグはNCLU（`net add ...`）構文を前提としており、環境によっては読み替えが必要
-  （詳細は[詳細設計書 6章](./vxlan-evpn-detailed-design.md#6-コンフィグ抜粋)の注記を参照）。
+- **Cumulus VX 5.4.0のこのGNS3テンプレートではNCLU（`net add ...`）が使用不可**（実機検証で
+  判明）。`net show`/`net help`は動くが、`net add`のプラグインからinterface/loopback/
+  bridge/vxlan/bgpが除外されており「Command not found」になる。代替のNVUE（`nv`）も
+  デーモン（`nvued`）がテンプレート既定のRAM（1024MB、実効723MB）ではOOM Killerに落ちて
+  起動できない。**本設計はNCLU/NVUEを使わず、ifupdown2（`/etc/network/interfaces`）+
+  vtyshを直接使う方式に変更済み**（[詳細設計書 6章](./vxlan-evpn-detailed-design.md#6-コンフィグ抜粋)参照）。
+- **QEMUのadapter番号とCumulus VXのswpポート番号は1つズレる**（adapter0=eth0(mgmt)、
+  adapter1=swp1、adapter2=swp2 ...）。`examples/vxlan_evpn_topology.yml`の`links:`は
+  このズレを踏まえて調整済み。
+- Cumulus VXの初回ログイン（`cumulus`/`cumulus`）はパスワード変更を強制される。
+- SPINE（FRR、MTU 1500）とLEAF（Cumulus、MTU 9216）でMTUが異なるため、OSPFネイバーが
+  `ExStart`で停止する。両側に`ip ospf mtu-ignore`が必須。
 - VNIは10010（VLAN10）の1つのみとし、複数VNI・複数テナントの分離検証は対象外。
 - SPINEは1台のみで、RRの冗長化（RR2台構成）は対象外。
 - VXLAN越しのL3ルーティング（Anycast Gateway、Symmetric IRB）は対象外。あくまでL2VNIの

@@ -1,4 +1,4 @@
-# VXLAN/EVPN ファブリック検証トポロジー
+# VXLAN/EVPN ファブリック検証トポロジー (GNS3実機検証済み)
 #
 # 構成: PC1 - LEAF1 - SPINE - LEAF2 - PC2
 #   SPINE : FRR。BGP EVPN の Route Reflector (RR) のみ担当。VXLAN/VNIは持たない。
@@ -8,12 +8,35 @@
 #
 # SPINE(FRR)/LEAF1/LEAF2(Cumulus VX)はいずれもQEMU系ノードのため、`gns3lab deploy`の
 # CLI自動投入(dynamips/IOU/VPCS/SONiC-VSのみ対応)は非対応。GNS3のコンソールから手動で
-# 投入してください(このファイルの各ノードのconfig:の内容をそのまま貼り付け)。PC1/PC2(VPCS)
-# は自動投入されます。
+# 投入する。PC1/PC2(VPCS)は自動投入される。
 #
-# LEAF1/LEAF2のconfig:はCumulus VXのNCLU("net add ...")構文。Cumulus VX 5.4.0はNVUE
-# (nv add ...)がデフォルトの環境もあるため、`net add`が通らない場合は `net --help` で
-# NCLU互換モードが有効か確認するか、NVUE構文に読み替えること。
+# --- 重要: Cumulus VX 5.4.0特有の落とし穴 (実機検証で判明) ---
+#
+# 1. adapter番号とswpポート番号がズレる。adapter0 = eth0(mgmt)、adapter1 = swp1、
+#    adapter2 = swp2 ... という対応になる(「adapter0=swp1」ではない！)。下記linksは
+#    このズレを踏まえた番号になっている(LEAF側は 1/0 = swp1, 2/0 = swp2)。
+#
+# 2. NCLU(`net add ...`)はこのビルドでは動作しない。Cumulus Linux 5.x系ではL2/L3/VXLAN
+#    設定の主体がNVUE(`nv`)に移行しており、NCLUの`net add`プラグインからinterface/
+#    loopback/bridge/vxlan/bgpが除外されている(`net show`/`net help`は動く)。
+#    NVUE(`nv`)はデーモン(nvued)がテンプレートのデフォルトRAM(1024MB、実効723MB)では
+#    OOM Killerに落とされて起動できない。→ 本トポロジーでは NCLU/NVUE を使わず、
+#    Cumulus Linuxのネイティブな仕組み(ifupdown2の`/etc/network/interfaces` + vtysh)
+#    を直接使う。これはNCLU/NVUEが内部で生成するのと同じ設定であり、正規の手段。
+#
+# 3. 初回ログイン(`cumulus`/`cumulus`)はパスワード変更を強制される
+#    (`administrator enforced`)。新パスワードはノードごとに決めて以後sudoにも使う
+#    (本書では例として `admin123` を使用)。
+#
+# 4. `/etc/frr/daemons` はデフォルトで `bgpd=no` / `ospfd=no`。有効化して
+#    `systemctl restart frr` が必要。
+#
+# 5. SPINE(FRR, eth0 MTU 1500)とLEAF(Cumulus, swp MTU 9216)でMTUが不一致のため、
+#    OSPFネイバーが ExStart で止まる。両側に `ip ospf mtu-ignore` が必要。
+#
+# 6. ブリッジに`swp2`を追加しただけでは自動的にVLAN10には乗らない(デフォルトVLAN1の
+#    ままになる)。`swp2`にも明示的に `bridge-access 10` が必要
+#    (vni10010側の`bridge-access 10`だけでは不十分)。
 #
 # --- IPアドレス計画 ---
 #   Underlay (P2P):
@@ -27,15 +50,41 @@
 #     BGP AS 65000 (iBGP, SPINEがRoute Reflector, LEAF1/LEAF2がRRクライアント)
 #     L2VNI 10010 = VLAN10 = 192.168.10.0/24 (PC1=.10, PC2=.20)
 #
-# --- 検証手順の例 (デプロイ後、config:を手動投入してから) ---
-#   1. 各ノードで `show ip ospf neighbor` (vtysh) / `net show ospf neighbor` (Cumulus)
-#      でUnderlayのOSPF隣接を確認
-#   2. SPINEで `show bgp l2vpn evpn summary` (vtysh) でLEAF1/LEAF2とのEVPN隣接を確認
-#   3. LEAF1/LEAF2で `net show bgp l2vpn evpn vni 10010` などでVNI 10010のType-2/3ルートが
-#      対向から学習できているか確認
+# --- LEAF1の投入手順 (LEAF2はIP/VNI local-tunnelipを読み替え) ---
+#   $ sudo tee -a /etc/network/interfaces << 'EOF'
+#
+#   auto swp1
+#   iface swp1
+#       address 10.255.0.2/30
+#
+#   auto swp2
+#   iface swp2
+#       bridge-access 10
+#
+#   auto vni10010
+#   iface vni10010
+#       vxlan-id 10010
+#       vxlan-local-tunnelip 10.255.255.1
+#       bridge-access 10
+#
+#   auto bridge
+#   iface bridge
+#       bridge-vlan-aware yes
+#       bridge-ports swp2 vni10010
+#       bridge-vids 10
+#   EOF
+#   $ sudo sed -i '/^iface lo inet loopback/a\    address 10.255.255.1/32' /etc/network/interfaces
+#   $ sudo ifreload -a
+#   $ sudo sed -i 's/^bgpd=no/bgpd=yes/; s/^ospfd=no/ospfd=yes/' /etc/frr/daemons
+#   $ sudo systemctl restart frr
+#   その後、下記LEAF1の config: (vtysh部分) を `sudo vtysh` に貼り付ける。
+#
+# --- 検証手順の例 (デプロイ・上記手順投入後) ---
+#   1. SPINEで `show ip ospf neighbor` (vtysh) でLEAF1/LEAF2双方がFullを確認
+#   2. SPINEで `show bgp l2vpn evpn summary` でLEAF1/LEAF2とのEVPN隣接(Established)を確認
+#   3. LEAF1/LEAF2で `sudo vtysh -c "show evpn vni 10010"` でリモートVTEP・MAC学習数を確認
 #   4. PC1 -> PC2 で ping 192.168.10.20 が通ることを確認 (VXLANカプセル化されたL2通信)
-#   5. LEAF1/LEAF2で `net show interface vni10010` / `bridge fdb show` でVTEP間の
-#      VXLANトンネル・MACアドレステーブルを確認
+#      → 実機で5/5成功を確認済み
 
 name: vxlan_evpn_lab
 
@@ -48,8 +97,10 @@ nodes:
       configure terminal
       interface eth0
        ip address 10.255.0.1/30
+       ip ospf mtu-ignore
       interface eth1
        ip address 10.255.0.5/30
+       ip ospf mtu-ignore
       interface lo
        ip address 10.255.255.100/32
       router ospf
@@ -72,51 +123,56 @@ nodes:
       end
       write memory
 
+  # NOTE: LEAF1/LEAF2は「config:」だけでは完結しない(ifupdown2側の下準備が別途必要)。
+  # ここに書くのはvtysh(FRR)投入分のみ。/etc/network/interfaces の内容は上記コメント
+  # 「LEAF1の投入手順」を参照し、sudo権限で先に投入・ifreloadしておくこと。
   LEAF1:
     template: cumulus-switch
     x: -150
     y: 0
     config: |
-      net add loopback lo ip address 10.255.255.1/32
-      net add interface swp1 ip address 10.255.0.2/30
-      net add interface swp1 ospf area 0.0.0.0
-      net add loopback lo ospf area 0.0.0.0
-      net add bridge bridge vlan-aware
-      net add bridge bridge ports swp2
-      net add bridge bridge vids 10
-      net add vxlan vni10010 vxlan id 10010
-      net add vxlan vni10010 vxlan local-tunnelip 10.255.255.1
-      net add vxlan vni10010 bridge access 10
-      net add bgp autonomous-system 65000
-      net add bgp router-id 10.255.255.1
-      net add bgp neighbor 10.255.255.100 remote-as internal
-      net add bgp neighbor 10.255.255.100 update-source lo
-      net add bgp l2vpn evpn neighbor 10.255.255.100 activate
-      net add bgp l2vpn evpn advertise-all-vni
-      net commit
+      configure terminal
+      interface swp1
+       ip ospf area 0.0.0.0
+       ip ospf mtu-ignore
+      interface lo
+       ip ospf area 0.0.0.0
+      router ospf
+      router bgp 65000
+       bgp router-id 10.255.255.1
+       no bgp default ipv4-unicast
+       neighbor 10.255.255.100 remote-as internal
+       neighbor 10.255.255.100 update-source lo
+       address-family l2vpn evpn
+        neighbor 10.255.255.100 activate
+        advertise-all-vni
+       exit-address-family
+      end
+      write memory
 
   LEAF2:
     template: cumulus-switch
     x: 150
     y: 0
     config: |
-      net add loopback lo ip address 10.255.255.2/32
-      net add interface swp1 ip address 10.255.0.6/30
-      net add interface swp1 ospf area 0.0.0.0
-      net add loopback lo ospf area 0.0.0.0
-      net add bridge bridge vlan-aware
-      net add bridge bridge ports swp2
-      net add bridge bridge vids 10
-      net add vxlan vni10010 vxlan id 10010
-      net add vxlan vni10010 vxlan local-tunnelip 10.255.255.2
-      net add vxlan vni10010 bridge access 10
-      net add bgp autonomous-system 65000
-      net add bgp router-id 10.255.255.2
-      net add bgp neighbor 10.255.255.100 remote-as internal
-      net add bgp neighbor 10.255.255.100 update-source lo
-      net add bgp l2vpn evpn neighbor 10.255.255.100 activate
-      net add bgp l2vpn evpn advertise-all-vni
-      net commit
+      configure terminal
+      interface swp1
+       ip ospf area 0.0.0.0
+       ip ospf mtu-ignore
+      interface lo
+       ip ospf area 0.0.0.0
+      router ospf
+      router bgp 65000
+       bgp router-id 10.255.255.2
+       no bgp default ipv4-unicast
+       neighbor 10.255.255.100 remote-as internal
+       neighbor 10.255.255.100 update-source lo
+       address-family l2vpn evpn
+        neighbor 10.255.255.100 activate
+        advertise-all-vni
+       exit-address-family
+      end
+      write memory
 
   PC1:
     template: vpcs
@@ -135,16 +191,18 @@ nodes:
       save
 
 links:
-  - [SPINE:0/0, LEAF1:0/0]
-  - [SPINE:1/0, LEAF2:0/0]
-  - [LEAF1:1/0, PC1:0/0]
-  - [LEAF2:1/0, PC2:0/0]
+  # LEAF側は adapter1=swp1, adapter2=swp2 (adapter0=eth0/mgmt のため1つズレる)
+  - [SPINE:0/0, LEAF1:1/0]
+  - [SPINE:1/0, LEAF2:1/0]
+  - [LEAF1:2/0, PC1:0/0]
+  - [LEAF2:2/0, PC2:0/0]
 
 notes:
   - text: |
-      VXLAN/EVPN ファブリック
+      VXLAN/EVPN ファブリック (GNS3実機検証済み)
       SPINE=FRR(Route Reflector) / LEAF1,LEAF2=Cumulus VX(VTEP)
       L2VNI 10010 = VLAN10 = 192.168.10.0/24
+      LEAF側リンクは 1/0=swp1, 2/0=swp2 (adapter0=eth0/mgmt)
     x: -250
     y: -200
     z: 1

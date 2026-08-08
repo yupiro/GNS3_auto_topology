@@ -100,15 +100,43 @@ Router# show ip ospf neighbor
 ### 基本操作（ログイン後）
 ```
 cumulus@cumulus:~$ net show interface
-cumulus@cumulus:~$ net add interface swp1 ip address 10.0.0.1/24
-cumulus@cumulus:~$ net add bgp autonomous-system 65000
-cumulus@cumulus:~$ net add bgp neighbor swp1 remote-as external
-cumulus@cumulus:~$ net commit
-cumulus@cumulus:~$ net show bgp summary
 ```
-FRRの `vtysh` も併用可能（`net commit` した内容が `vtysh` 側にも反映される）。
+`net show`/`net help`は動くが、下記の注意点の通り**`net add`（NCLU書き込み系）はこの
+GNS3テンプレートでは使用不可**。実機で確認できた代替手順は
+[vxlan-evpn-detailed-design.md 6章](./vxlan-evpn-detailed-design.md#6-コンフィグ抜粋)を参照。
+概要は以下の通り。
 
-### 注意点
+```
+# L2/L3設定は ifupdown2 (/etc/network/interfaces) を直接編集
+sudo tee -a /etc/network/interfaces << 'EOF'
+auto swp1
+iface swp1
+    address 10.0.0.1/24
+EOF
+sudo ifreload -a
+
+# ルーティングは vtysh (FRRデーモンの有効化が別途必要、後述)
+sudo vtysh -c "configure terminal" -c "router bgp 65000" -c "neighbor swp1 remote-as external"
+```
+
+### 注意点（実機検証で判明）
+- **`net add interface/loopback/bridge/vxlan/bgp`はこのテンプレートでは動作しない**
+  （`ERROR: Command not found`）。`dpkg -L nclu`で確認したところ、このビルドのNCLU
+  プラグインはdns/dhcp/nat/ntp/ports/snmp等に限られ、L2/L3コア機能が含まれていない。
+  代替の`nv`（NVUE）もデーモン`nvued`がテンプレート既定RAM（1024MB、実効723MB）では
+  OOM Killerに落とされて起動しない。→ 上記の通りifupdown2 + vtysh直接方式を使うこと。
+- `/etc/frr/daemons`はデフォルトで`bgpd=no`/`ospfd=no`。`sed`等で`yes`に変更して
+  `systemctl restart frr`が必要（vtyshで`router bgp`等を入力しても`bgpd is not
+  running`と出るだけで無反応な場合、まずここを疑う）。
+- ブリッジポートには`bridge-access <vlan>`を明示しないとデフォルトVLAN(1)のままになる
+  （VXLANインターフェース側だけでなく、ホスト収容ポート側にも必要）。
+- **GNS3のadapter番号とswpポート番号が1つズレる**（`adapter0`=`eth0`(mgmt)、`adapter1`=
+  `swp1`、`adapter2`=`swp2`...）。トポロジーYAMLの`links:`でハマりやすいので、
+  `ip -br link show`のMACアドレス末尾で実際の対応を確認すること。
+- 初回ログイン（`cumulus`/`cumulus`）はパスワード変更が強制される。GNS3公式カタログの
+  `cumulus/cumulus`はログインには使えてもsudoパスワードとしては通らないことがある
+  （cloud-init未実行の環境のため）。ログイン時の強制パスワード変更で新パスワードを
+  設定すれば、以後sudoにもそのパスワードが使える。
 - `config:` 自動投入は現状 gns3lab 未対応。
 
 ## 5. OPNsense
