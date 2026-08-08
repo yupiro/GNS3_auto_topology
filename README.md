@@ -168,6 +168,10 @@ templates:
 - `examples/nat_topology.yml`: 内部LAN(PC1/PC2/SVR1) - NATルーター(R1) - 外部ホスト(EXT-PC) による
   動的PAT(overload)と静的NATの検証トポロジー
   - 設計書: [基本設計書](docs/nat-basic-design.md) / [詳細設計書](docs/nat-detailed-design.md)
+- `examples/vxlan_evpn_topology.yml`: SPINE(FRR, BGP EVPN Route Reflector) - LEAF1/LEAF2
+  (Cumulus VX, VTEP) によるVXLAN/EVPNファブリック。L2VNI 10010でPC1/PC2のセグメントを
+  ストレッチする
+  - 設計書: [基本設計書](docs/vxlan-evpn-basic-design.md) / [詳細設計書](docs/vxlan-evpn-detailed-design.md)
 
 ### 2b. ノードに初期設定を持たせる（config自動投入）
 

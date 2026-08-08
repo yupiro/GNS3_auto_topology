@@ -1,0 +1,150 @@
+# VXLAN/EVPN ファブリック検証トポロジー
+#
+# 構成: PC1 - LEAF1 - SPINE - LEAF2 - PC2
+#   SPINE : FRR。BGP EVPN の Route Reflector (RR) のみ担当。VXLAN/VNIは持たない。
+#   LEAF1/LEAF2 : Cumulus VX。VTEP。L2VNI 10010 (=VLAN10) でPC1/PC2のセグメントを
+#                 VXLANでストレッチする。
+#   PC1/PC2 : 疎通確認用エンドホスト (VPCS)。同一サブネット(192.168.10.0/24)。
+#
+# SPINE(FRR)/LEAF1/LEAF2(Cumulus VX)はいずれもQEMU系ノードのため、`gns3lab deploy`の
+# CLI自動投入(dynamips/IOU/VPCS/SONiC-VSのみ対応)は非対応。GNS3のコンソールから手動で
+# 投入してください(このファイルの各ノードのconfig:の内容をそのまま貼り付け)。PC1/PC2(VPCS)
+# は自動投入されます。
+#
+# LEAF1/LEAF2のconfig:はCumulus VXのNCLU("net add ...")構文。Cumulus VX 5.4.0はNVUE
+# (nv add ...)がデフォルトの環境もあるため、`net add`が通らない場合は `net --help` で
+# NCLU互換モードが有効か確認するか、NVUE構文に読み替えること。
+#
+# --- IPアドレス計画 ---
+#   Underlay (P2P):
+#     SPINE-LEAF1 : 10.255.0.0/30  (SPINE=.1, LEAF1=.2)
+#     SPINE-LEAF2 : 10.255.0.4/30  (SPINE=.5, LEAF2=.6)
+#   Loopback (Router-ID / VTEP source):
+#     SPINE : 10.255.255.100/32
+#     LEAF1 : 10.255.255.1/32
+#     LEAF2 : 10.255.255.2/32
+#   Overlay:
+#     BGP AS 65000 (iBGP, SPINEがRoute Reflector, LEAF1/LEAF2がRRクライアント)
+#     L2VNI 10010 = VLAN10 = 192.168.10.0/24 (PC1=.10, PC2=.20)
+#
+# --- 検証手順の例 (デプロイ後、config:を手動投入してから) ---
+#   1. 各ノードで `show ip ospf neighbor` (vtysh) / `net show ospf neighbor` (Cumulus)
+#      でUnderlayのOSPF隣接を確認
+#   2. SPINEで `show bgp l2vpn evpn summary` (vtysh) でLEAF1/LEAF2とのEVPN隣接を確認
+#   3. LEAF1/LEAF2で `net show bgp l2vpn evpn vni 10010` などでVNI 10010のType-2/3ルートが
+#      対向から学習できているか確認
+#   4. PC1 -> PC2 で ping 192.168.10.20 が通ることを確認 (VXLANカプセル化されたL2通信)
+#   5. LEAF1/LEAF2で `net show interface vni10010` / `bridge fdb show` でVTEP間の
+#      VXLANトンネル・MACアドレステーブルを確認
+
+name: vxlan_evpn_lab
+
+nodes:
+  SPINE:
+    template: frr-router
+    x: 0
+    y: -100
+    config: |
+      configure terminal
+      interface eth0
+       ip address 10.255.0.1/30
+      interface eth1
+       ip address 10.255.0.5/30
+      interface lo
+       ip address 10.255.255.100/32
+      router ospf
+       network 10.255.0.0/30 area 0.0.0.0
+       network 10.255.0.4/30 area 0.0.0.0
+       network 10.255.255.100/32 area 0.0.0.0
+      router bgp 65000
+       bgp router-id 10.255.255.100
+       no bgp default ipv4-unicast
+       neighbor 10.255.255.1 remote-as 65000
+       neighbor 10.255.255.1 update-source lo
+       neighbor 10.255.255.2 remote-as 65000
+       neighbor 10.255.255.2 update-source lo
+       address-family l2vpn evpn
+        neighbor 10.255.255.1 activate
+        neighbor 10.255.255.1 route-reflector-client
+        neighbor 10.255.255.2 activate
+        neighbor 10.255.255.2 route-reflector-client
+       exit-address-family
+      end
+      write memory
+
+  LEAF1:
+    template: cumulus-switch
+    x: -150
+    y: 0
+    config: |
+      net add loopback lo ip address 10.255.255.1/32
+      net add interface swp1 ip address 10.255.0.2/30
+      net add interface swp1 ospf area 0.0.0.0
+      net add loopback lo ospf area 0.0.0.0
+      net add bridge bridge vlan-aware
+      net add bridge bridge ports swp2
+      net add bridge bridge vids 10
+      net add vxlan vni10010 vxlan id 10010
+      net add vxlan vni10010 vxlan local-tunnelip 10.255.255.1
+      net add vxlan vni10010 bridge access 10
+      net add bgp autonomous-system 65000
+      net add bgp router-id 10.255.255.1
+      net add bgp neighbor 10.255.255.100 remote-as internal
+      net add bgp neighbor 10.255.255.100 update-source lo
+      net add bgp l2vpn evpn neighbor 10.255.255.100 activate
+      net add bgp l2vpn evpn advertise-all-vni
+      net commit
+
+  LEAF2:
+    template: cumulus-switch
+    x: 150
+    y: 0
+    config: |
+      net add loopback lo ip address 10.255.255.2/32
+      net add interface swp1 ip address 10.255.0.6/30
+      net add interface swp1 ospf area 0.0.0.0
+      net add loopback lo ospf area 0.0.0.0
+      net add bridge bridge vlan-aware
+      net add bridge bridge ports swp2
+      net add bridge bridge vids 10
+      net add vxlan vni10010 vxlan id 10010
+      net add vxlan vni10010 vxlan local-tunnelip 10.255.255.2
+      net add vxlan vni10010 bridge access 10
+      net add bgp autonomous-system 65000
+      net add bgp router-id 10.255.255.2
+      net add bgp neighbor 10.255.255.100 remote-as internal
+      net add bgp neighbor 10.255.255.100 update-source lo
+      net add bgp l2vpn evpn neighbor 10.255.255.100 activate
+      net add bgp l2vpn evpn advertise-all-vni
+      net commit
+
+  PC1:
+    template: vpcs
+    x: -300
+    y: 100
+    config: |
+      ip 192.168.10.10 255.255.255.0
+      save
+
+  PC2:
+    template: vpcs
+    x: 300
+    y: 100
+    config: |
+      ip 192.168.10.20 255.255.255.0
+      save
+
+links:
+  - [SPINE:0/0, LEAF1:0/0]
+  - [SPINE:1/0, LEAF2:0/0]
+  - [LEAF1:1/0, PC1:0/0]
+  - [LEAF2:1/0, PC2:0/0]
+
+notes:
+  - text: |
+      VXLAN/EVPN ファブリック
+      SPINE=FRR(Route Reflector) / LEAF1,LEAF2=Cumulus VX(VTEP)
+      L2VNI 10010 = VLAN10 = 192.168.10.0/24
+    x: -250
+    y: -200
+    z: 1
